@@ -57,7 +57,7 @@ void AeronSubscriber::run() {
     auto handler = [&](const concurrent::AtomicBuffer& buffer,
                        aeron::util::index_t offset,
                        aeron::util::index_t length,
-                       const Header&) {
+                       const concurrent::logbuffer::Header&) {
         if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
             ++stats_.parse_failures;
             return;

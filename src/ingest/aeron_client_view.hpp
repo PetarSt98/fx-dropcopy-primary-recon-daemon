@@ -7,16 +7,16 @@
 #include <string>
 
 #include <aeron/Aeron.h>
-#include <aeron/AtomicBuffer.h>
-#include <aeron/Subscription.h>
-#include <aeron/concurrent/logbuffer/Header.h>
+#include <concurrent/AtomicBuffer.h>
+#include <Subscription.h>
+#include <concurrent/logbuffer/Header.h>
 
 namespace ingest {
 
 using FragmentHandler = std::function<void(const aeron::concurrent::AtomicBuffer&,
                                            aeron::util::index_t,
                                            aeron::util::index_t,
-                                           const aeron::Header&)>;
+                                           const aeron::concurrent::logbuffer::Header&)>;
 
 class SubscriptionView {
 public:
