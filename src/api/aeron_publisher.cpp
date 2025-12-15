@@ -59,7 +59,21 @@ int main(int argc, char** argv) {
 
     aeron::Context ctx;
     auto client = aeron::Aeron::connect(ctx);
-    auto pub = client->addPublication(channel, stream_id);
+    const auto pub_reg_id = client->addPublication(channel, stream_id);
+
+    std::shared_ptr<aeron::Publication> pub;
+    const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (!pub && std::chrono::steady_clock::now() < wait_deadline) {
+        pub = client->findPublication(pub_reg_id);
+        if (!pub) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        }
+    }
+
+    if (!pub) {
+        std::cerr << "Publication not available for registration id " << pub_reg_id << std::endl;
+        return 1;
+    }
 
     std::size_t sent = 0;
     while (sent < count) {
