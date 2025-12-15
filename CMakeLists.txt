@@ -27,7 +27,31 @@ add_library(fx_core
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-find_package(aeron REQUIRED)
+# Try config-based discovery first; fall back to manual lookup if Aeron does not
+# ship a CMake package config in the current environment (e.g., custom install
+# from source).
+find_package(aeron CONFIG QUIET)
+if(NOT aeron_FOUND)
+  message(STATUS "Aeron config package not found; attempting manual discovery")
+  find_path(AERON_INCLUDE_DIR
+    NAMES aeron/Aeron.h
+    PATH_SUFFIXES include
+    PATHS /usr/local /opt/homebrew /opt/local
+  )
+  find_library(AERON_CLIENT_LIB
+    NAMES aeron_client
+    PATH_SUFFIXES lib
+    PATHS /usr/local /opt/homebrew /opt/local
+  )
+  if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
+    message(FATAL_ERROR "Aeron client not found. Set aeron_DIR or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
+  endif()
+  add_library(aeron::aeron_client UNKNOWN IMPORTED)
+  set_target_properties(aeron::aeron_client PROPERTIES
+    IMPORTED_LOCATION "${AERON_CLIENT_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${AERON_INCLUDE_DIR}"
+  )
+endif()
 
 add_executable(fx_ingest_demo src/api/demo_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(fx_ingest_demo PRIVATE fx_core)

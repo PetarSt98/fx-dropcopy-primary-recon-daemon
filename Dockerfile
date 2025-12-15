@@ -44,7 +44,7 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/aeron.conf && ldconfig
 
 WORKDIR /workspace
 COPY . .
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local \
     && cmake --build build --target fx_exec_recond fx_ingest_demo
 
 FROM ubuntu:22.04 AS runtime
