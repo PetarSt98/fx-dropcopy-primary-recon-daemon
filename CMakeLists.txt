@@ -34,8 +34,6 @@ find_package(aeron CONFIG QUIET)
 if(NOT aeron_FOUND)
   message(STATUS "Aeron config package not found; attempting manual discovery")
 
-  # Allow callers to hint a custom install root (e.g., /usr/local from a
-  # source build) while still falling back to common prefixes.
   set(_AERON_ROOT_CANDIDATES
       $ENV{AERON_ROOT}
       $ENV{AERON_HOME}
@@ -46,19 +44,30 @@ if(NOT aeron_FOUND)
       /opt/local
   )
 
-  # Locate the include directory that contains aeron/Aeron.h
-  find_path(AERON_INCLUDE_DIR
-    NAMES aeron/Aeron.h uk/co/real_logic/aeron/Aeron.h
-    PATHS ${_AERON_ROOT_CANDIDATES}
-    PATH_SUFFIXES "" include include/aeron
-  )
+  set(AERON_INCLUDE_DIR "")
+  set(AERON_CLIENT_LIB "")
 
-  # Locate the client library; accept both libaeron_client and libaeron.
-  find_library(AERON_CLIENT_LIB
-    NAMES aeron_client aeron
-    PATHS ${_AERON_ROOT_CANDIDATES}
-    PATH_SUFFIXES "" lib lib64 lib/x86_64-linux-gnu
-  )
+  foreach(_root IN LISTS _AERON_ROOT_CANDIDATES)
+    if(_root)
+      foreach(_hdr_candidate
+              "${_root}/include/aeron/Aeron.h"
+              "${_root}/include/uk/co/real_logic/aeron/Aeron.h"
+              "${_root}/include/Aeron.h"
+              "${_root}/aeron/Aeron.h")
+        if(EXISTS "${_hdr_candidate}" AND NOT AERON_INCLUDE_DIR)
+          get_filename_component(AERON_INCLUDE_DIR "${_hdr_candidate}" DIRECTORY)
+        endif()
+      endforeach()
+
+      foreach(_lib_dir "${_root}" "${_root}/lib" "${_root}/lib64" "${_root}/lib/x86_64-linux-gnu")
+        foreach(_lib_name libaeron_client.so libaeron_client.dylib libaeron_client.a libaeron.so libaeron.dylib libaeron.a)
+          if(EXISTS "${_lib_dir}/${_lib_name}" AND NOT AERON_CLIENT_LIB)
+            set(AERON_CLIENT_LIB "${_lib_dir}/${_lib_name}")
+          endif()
+        endforeach()
+      endforeach()
+    endif()
+  endforeach()
 
   if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
     message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
