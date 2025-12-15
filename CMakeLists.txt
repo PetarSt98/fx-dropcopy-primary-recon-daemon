@@ -48,16 +48,16 @@ if(NOT aeron_FOUND)
 
   # Locate the include directory that contains aeron/Aeron.h
   find_path(AERON_INCLUDE_DIR
-    NAMES aeron/Aeron.h
+    NAMES aeron/Aeron.h uk/co/real_logic/aeron/Aeron.h
     PATHS ${_AERON_ROOT_CANDIDATES}
-    PATH_SUFFIXES include
+    PATH_SUFFIXES "" include include/aeron
   )
 
   # Locate the client library; accept both libaeron_client and libaeron.
   find_library(AERON_CLIENT_LIB
     NAMES aeron_client aeron
     PATHS ${_AERON_ROOT_CANDIDATES}
-    PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+    PATH_SUFFIXES "" lib lib64 lib/x86_64-linux-gnu
   )
 
   if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
