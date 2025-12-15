@@ -39,41 +39,26 @@ if(NOT aeron_FOUND)
   set(_AERON_ROOT_CANDIDATES
       $ENV{AERON_ROOT}
       $ENV{AERON_HOME}
+      ${CMAKE_PREFIX_PATH}
       /usr/local
       /usr
       /opt/homebrew
       /opt/local
   )
 
-  set(AERON_INCLUDE_DIR "")
-  set(AERON_CLIENT_LIB "")
+  # Locate the include directory that contains aeron/Aeron.h
+  find_path(AERON_INCLUDE_DIR
+    NAMES aeron/Aeron.h
+    PATHS ${_AERON_ROOT_CANDIDATES}
+    PATH_SUFFIXES include
+  )
 
-  foreach(_root IN LISTS _AERON_ROOT_CANDIDATES)
-    if(NOT _root)
-      continue()
-    endif()
-
-    set(_include_candidate "${_root}/include/aeron/Aeron.h")
-    if(EXISTS "${_include_candidate}")
-      set(AERON_INCLUDE_DIR "${_root}/include")
-    elseif(EXISTS "${_root}/include/Aeron.h")
-      set(AERON_INCLUDE_DIR "${_root}/include")
-    endif()
-
-    if(AERON_INCLUDE_DIR)
-      find_library(AERON_CLIENT_LIB
-        NAMES aeron_client aeron
-        PATHS
-          "${_root}/lib"
-          "${_root}/lib64"
-          "${_root}/lib/x86_64-linux-gnu"
-        NO_DEFAULT_PATH
-      )
-      if(AERON_CLIENT_LIB)
-        break()
-      endif()
-    endif()
-  endforeach()
+  # Locate the client library; accept both libaeron_client and libaeron.
+  find_library(AERON_CLIENT_LIB
+    NAMES aeron_client aeron
+    PATHS ${_AERON_ROOT_CANDIDATES}
+    PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+  )
 
   if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
     message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
