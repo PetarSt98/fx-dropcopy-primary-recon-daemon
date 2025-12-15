@@ -17,6 +17,7 @@ add_library(fx_core
     src/ingest/spsc_ring.hpp
     src/ingest/fix_parser.cpp
     src/core/exec_event.hpp
+    src/core/wire_exec_event.hpp
     src/core/reconciler.cpp
     src/util/rdtsc.hpp
     src/util/log.hpp
@@ -26,13 +27,23 @@ add_library(fx_core
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(fx_ingest_demo src/api/main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
+find_package(aeron REQUIRED)
+
+add_executable(fx_ingest_demo src/api/demo_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(fx_ingest_demo PRIVATE fx_core)
+
+add_executable(fx_exec_recond
+    src/api/recond_main.cpp
+    src/ingest/aeron_subscriber.cpp
+    src/core/reconciler.cpp
+)
+target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
 
 add_executable(unit_tests
     tests/all_tests.cpp
     tests/ring_tests.cpp
     tests/fix_parser_tests.cpp
+    tests/from_wire_tests.cpp
     tests/test_main.hpp
     src/ingest/fix_parser.cpp
     src/core/reconciler.cpp
