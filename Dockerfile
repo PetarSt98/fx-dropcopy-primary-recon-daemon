@@ -13,6 +13,11 @@ RUN apt-get update \
         ca-certificates \
         pkg-config \
         git \
+        openjdk-11-jdk-headless \
+        zlib1g-dev \
+        uuid-dev \
+        libbsd-dev \
+        python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Fetch and build Aeron C++ client + media driver (no samples/tests)
@@ -32,6 +37,7 @@ RUN apt-get update \
         build-essential \
         cmake \
         pkg-config \
+        openjdk-11-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=aeron-build /usr/local /usr/local
@@ -48,6 +54,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libstdc++6 \
+        openjdk-11-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=aeron-build /usr/local /usr/local
