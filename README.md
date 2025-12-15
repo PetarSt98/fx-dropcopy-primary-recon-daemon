@@ -252,3 +252,26 @@ The goal of this repository is to:
 
 It is intentionally not a toy matching engine or generic simulator; it focuses on a real, essential piece of infrastructure that serious FX trading firms actually need to get right.
 
+
+10. Containerized build and runtime
+-----------------------------------
+
+The repository ships with a multi-stage `Dockerfile` that builds Aeron and the
+reconciliation binaries, plus a `docker-compose.yml` that co-locates an Aeron
+media driver with the recon daemon for easy bring-up.
+
+Build the image locally:
+
+```
+docker build -t fx-recon:latest .
+```
+
+Launch the media driver and reconciler with the sample Aeron channels/stream IDs
+from compose:
+
+```
+docker compose up --build
+```
+
+Tweak the Aeron channel endpoints/stream IDs in `docker-compose.yml` to match
+your environment or venue connectivity.

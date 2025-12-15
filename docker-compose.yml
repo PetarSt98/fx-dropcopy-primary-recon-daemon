@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  aeron-media-driver:
+    build: .
+    image: fx-recon:latest
+    entrypoint: ["/usr/local/bin/aeronmd"]
+    command: ["-Daeron.dir=/var/tmp/aeron", "-Daeron.socket.soReusePort=true"]
+    networks:
+      - recon-net
+    volumes:
+      - aeron-md-data:/var/tmp/aeron
+    ports:
+      - "20121:20121/udp"
+      - "20122:20122/udp"
+
+  recon-daemon:
+    image: fx-recon:latest
+    depends_on:
+      - aeron-media-driver
+    networks:
+      - recon-net
+    environment:
+      - AERON_DIR=/var/tmp/aeron
+    volumes:
+      - aeron-md-data:/var/tmp/aeron
+    entrypoint: ["/usr/local/bin/fx_exec_recond"]
+    command: ["aeron:udp?endpoint=aeron-media-driver:20121", "1001", "aeron:udp?endpoint=aeron-media-driver:20122", "1002"]
+
+networks:
+  recon-net:
+    driver: bridge
+volumes:
+  aeron-md-data:
