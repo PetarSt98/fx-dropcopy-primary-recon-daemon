@@ -43,8 +43,13 @@ if(NOT aeron_FOUND)
       /usr/local/lib
       /usr/local/lib64
       /usr/local/lib/x86_64-linux-gnu
+      /usr
+      /usr/lib
+      /usr/lib64
+      /usr/lib/x86_64-linux-gnu
       /opt/homebrew
-      /opt/local)
+      /opt/local
+  )
 
   find_path(AERON_INCLUDE_DIR
     NAMES aeron/Aeron.h
@@ -53,7 +58,7 @@ if(NOT aeron_FOUND)
   )
 
   find_library(AERON_CLIENT_LIB
-    NAMES aeron_client
+    NAMES aeron_client aeron
     HINTS ${_AERON_HINTS}
     PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
   )
