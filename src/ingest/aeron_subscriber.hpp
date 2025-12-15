@@ -9,6 +9,7 @@
 
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
+#include "ingest/aeron_client_view.hpp"
 #include "ingest/spsc_ring.hpp"
 
 namespace ingest {
@@ -31,6 +32,14 @@ public:
                     std::shared_ptr<aeron::Aeron> client,
                     std::atomic<bool>& stop_flag) noexcept;
 
+    AeronSubscriber(std::string channel,
+                    std::int32_t stream_id,
+                    Ring& ring,
+                    ThreadStats& stats,
+                    core::Source source,
+                    std::shared_ptr<AeronClientView> client,
+                    std::atomic<bool>& stop_flag) noexcept;
+
     void run();
 
 private:
@@ -39,7 +48,7 @@ private:
     Ring& ring_;
     ThreadStats& stats_;
     core::Source source_;
-    std::shared_ptr<aeron::Aeron> client_;
+    std::shared_ptr<AeronClientView> client_;
     std::atomic<bool>& stop_flag_;
 };
 

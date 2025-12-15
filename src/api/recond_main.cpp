@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <chrono>
+#include <cstdlib>
 
 #include <Aeron.h>
 
@@ -44,8 +46,15 @@ int main(int argc, char** argv) {
     std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
     std::thread recon_thread([&] { recon.run(); });
 
-    std::cout << "fx_exec_recond running. Press Enter to exit." << std::endl;
-    std::cin.get();
+    const char* duration_env = std::getenv("RECOND_RUN_MS");
+    if (duration_env) {
+        const auto duration_ms = std::chrono::milliseconds{std::strtoul(duration_env, nullptr, 10)};
+        std::cout << "fx_exec_recond running for " << duration_ms.count() << "ms before shutdown." << std::endl;
+        std::this_thread::sleep_for(duration_ms);
+    } else {
+        std::cout << "fx_exec_recond running. Press Enter to exit." << std::endl;
+        std::cin.get();
+    }
     stop_flag.store(true, std::memory_order_release);
 
     primary_thread.join();
