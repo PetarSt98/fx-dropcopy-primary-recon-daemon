@@ -25,20 +25,31 @@ void AeronSubscriber::run() {
     using namespace aeron;
     constexpr int fragment_limit = 10;
 
-    std::shared_ptr<Subscription> subscription =
-        client_->addSubscription(channel_, stream_id_);
+    const auto registration_id = client_->addSubscription(channel_, stream_id_);
+
+    std::shared_ptr<Subscription> subscription;
+    while (!stop_flag_.load(std::memory_order_acquire) && !subscription) {
+        subscription = client_->findSubscription(registration_id);
+        if (!subscription) {
+            std::this_thread::yield();
+        }
+    }
+
+    if (!subscription) {
+        return;
+    }
 
     auto handler = [&](const concurrent::AtomicBuffer& buffer,
-                       util::index_t offset,
-                       util::index_t length,
+                       aeron::util::index_t offset,
+                       aeron::util::index_t length,
                        const Header&) {
-        if (length != static_cast<util::index_t>(sizeof(core::WireExecEvent))) {
+        if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
             ++stats_.parse_failures;
             return;
         }
 
         const auto* wire = reinterpret_cast<const core::WireExecEvent*>(buffer.buffer() + offset);
-        const core::ExecEvent evt = core::from_wire(*wire, source_, util::rdtsc());
+        const core::ExecEvent evt = core::from_wire(*wire, source_, ::util::rdtsc());
         if (!ring_.try_push(evt)) {
             ++stats_.drops;
         } else {
