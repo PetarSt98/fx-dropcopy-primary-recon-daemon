@@ -46,6 +46,7 @@ if(NOT aeron_FOUND)
 
   set(AERON_INCLUDE_DIR "")
   set(AERON_CLIENT_LIB "")
+  set(AERON_HEADER_PATH "")
 
   foreach(_root IN LISTS _AERON_ROOT_CANDIDATES)
     if(_root)
@@ -54,7 +55,8 @@ if(NOT aeron_FOUND)
               "${_root}/include/uk/co/real_logic/aeron/Aeron.h"
               "${_root}/include/Aeron.h"
               "${_root}/aeron/Aeron.h")
-        if(EXISTS "${_hdr_candidate}" AND NOT AERON_INCLUDE_DIR)
+        if(EXISTS "${_hdr_candidate}" AND NOT AERON_HEADER_PATH)
+          set(AERON_HEADER_PATH "${_hdr_candidate}")
           get_filename_component(_hdr_dir "${_hdr_candidate}" DIRECTORY)
           get_filename_component(_hdr_parent "${_hdr_dir}" DIRECTORY)
           # Prefer the parent of the aeron/ directory when present so <aeron/Aeron.h>
@@ -94,24 +96,59 @@ if(NOT aeron_FOUND)
   message(STATUS "Aeron include dir: ${AERON_INCLUDE_DIR}")
   message(STATUS "Aeron client lib: ${AERON_CLIENT_LIB}")
   message(STATUS "Aeron header: ${AERON_HEADER_PATH}")
+  message(STATUS "Aeron header found: ${AERON_HEADER_PATH}")
+
+  # If Aeron is installed "flat" (e.g. /usr/local/include/Aeron.h) but sources
+  # include <aeron/Aeron.h>, generate a small shim include dir that provides
+  # aeron/*.h wrappers mapping to the flat headers.
+    set(AERON_INCLUDE_DIRS "${AERON_INCLUDE_DIR}")
+    if(AERON_HEADER_PATH MATCHES "/include/Aeron.h$" AND NOT EXISTS "${AERON_INCLUDE_DIR}/aeron/Aeron.h")
+    set(AERON_SHIM_DIR "${CMAKE_BINARY_DIR}/aeron_include_shim")
+    file(MAKE_DIRECTORY "${AERON_SHIM_DIR}/aeron")
+
+    # Always provide aeron/Aeron.h
+    file(WRITE "${AERON_SHIM_DIR}/aeron/Aeron.h" "#pragma once\n#include <Aeron.h>\n")
+
+    # Optional: wrap all other flat headers too
+    file(GLOB _AERON_FLAT_HEADERS "${AERON_INCLUDE_DIR}/*.h")
+    foreach(_h IN LISTS _AERON_FLAT_HEADERS)
+        get_filename_component(_hn "${_h}" NAME)
+        if(NOT _hn STREQUAL "Aeron.h")
+        file(WRITE "${AERON_SHIM_DIR}/aeron/${_hn}" "#pragma once\n#include <${_hn}>\n")
+        endif()
+    endforeach()
+
+    list(PREPEND AERON_INCLUDE_DIRS "${AERON_SHIM_DIR}")
+    endif()
 
   # Prove the include path is usable before the main build to avoid late failures.
-  try_compile(AERON_HEADER_COMPILES
-              "${CMAKE_BINARY_DIR}/aeron_check"
-              SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_aeron_header.cpp"
-              CMAKE_FLAGS "-DCMAKE_CXX_STANDARD=23"
-                           "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
-                           "-DCMAKE_CXX_EXTENSIONS=OFF"
-                           "-DCMAKE_CXX_FLAGS=-I${AERON_INCLUDE_DIR}"
-              COPY_FILE "${CMAKE_BINARY_DIR}/aeron_check_bin")
-  if(NOT AERON_HEADER_COMPILES)
-    message(FATAL_ERROR "Failed to compile a test TU including <aeron/Aeron.h> with include path ${AERON_INCLUDE_DIR}")
-  endif()
+  set(_AERON_TRY_FLAGS "")
+  foreach(_inc IN LISTS _AERON_INCLUDE_DIRS)
+    string(APPEND _AERON_TRY_FLAGS " -I\"${_inc}\"")
+  endforeach()
+  string(STRIP "${_AERON_TRY_FLAGS}" _AERON_TRY_FLAGS)
+
+    include(CheckCXXSourceCompiles)
+
+    set(CMAKE_REQUIRED_INCLUDES ${AERON_INCLUDE_DIRS})
+    set(CMAKE_REQUIRED_FLAGS "-std=c++23")
+    check_cxx_source_compiles(
+    "#include <aeron/Aeron.h>\nint main(){return 0;}\n"
+    AERON_HEADER_COMPILES
+    )
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_FLAGS)
+
+    if(NOT AERON_HEADER_COMPILES)
+    message(FATAL_ERROR
+        "Failed to compile a test TU including <aeron/Aeron.h> with include paths: ${AERON_INCLUDE_DIRS}"
+    )
+    endif()
 
   add_library(aeron::aeron_client UNKNOWN IMPORTED)
   set_target_properties(aeron::aeron_client PROPERTIES
     IMPORTED_LOCATION "${AERON_CLIENT_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${AERON_INCLUDE_DIR}"
+    INTERFACE_INCLUDE_DIRECTORIES "${AERON_INCLUDE_DIRS}"
   )
 endif()
 
@@ -124,13 +161,6 @@ add_executable(fx_exec_recond
     src/core/reconciler.cpp
 )
 target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
-if(AERON_INCLUDE_DIR)
-  target_include_directories(fx_exec_recond PRIVATE
-    "${AERON_INCLUDE_DIR}"
-    "${AERON_INCLUDE_DIR}/aeron"
-    "${AERON_INCLUDE_DIR}/include"
-  )
-endif()
 
 add_executable(unit_tests
     tests/all_tests.cpp

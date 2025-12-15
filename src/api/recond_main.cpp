@@ -5,7 +5,7 @@
 #include <string>
 #include <thread>
 
-#include <aeron/Aeron.h>
+#include <Aeron.h>
 
 #include "core/reconciler.hpp"
 #include "ingest/aeron_subscriber.hpp"
