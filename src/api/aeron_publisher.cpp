@@ -1,3 +1,4 @@
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <vector>
 
 #include <Aeron.h>
+#include <concurrent/AtomicBuffer.h>
 
 #include "core/wire_exec_event.hpp"
 
@@ -35,7 +37,11 @@ core::WireExecEvent make_wire_exec(std::size_t seq) {
 }
 
 bool publish(aeron::Publication& pub, const core::WireExecEvent& evt) {
-    return pub.offer(reinterpret_cast<const std::uint8_t*>(&evt), sizeof(core::WireExecEvent)) > 0;
+    std::array<std::uint8_t, sizeof(core::WireExecEvent)> buffer{};
+    std::memcpy(buffer.data(), &evt, sizeof(core::WireExecEvent));
+
+    aeron::concurrent::AtomicBuffer atomic_buffer(buffer.data(), buffer.size());
+    return pub.offer(atomic_buffer, 0, static_cast<aeron::util::index_t>(buffer.size())) > 0;
 }
 
 } // namespace
