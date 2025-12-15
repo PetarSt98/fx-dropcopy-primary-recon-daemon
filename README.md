@@ -266,6 +266,10 @@ Build the image locally:
 docker build -t fx-recon:latest .
 ```
 
+The Dockerfile clones the Aeron tag (instead of using a tarball) so Gradle sees
+Git metadata when producing the Java media driver artifacts; this avoids build
+breaks during the Aeron Java/JNI packaging stage.
+
 Launch the media driver and reconciler with the sample Aeron channels/stream IDs
 from compose:
 

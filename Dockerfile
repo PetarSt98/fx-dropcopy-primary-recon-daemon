@@ -21,9 +21,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Fetch and build Aeron C++ client + media driver (no samples/tests)
-RUN curl -L "https://github.com/real-logic/aeron/archive/refs/tags/${AERON_VERSION}.tar.gz" -o /tmp/aeron.tar.gz \
-    && tar -xzf /tmp/aeron.tar.gz -C /tmp \
-    && cmake -S /tmp/aeron-${AERON_VERSION} -B /tmp/aeron-build \
+RUN git clone --branch ${AERON_VERSION} --depth 1 https://github.com/real-logic/aeron.git /tmp/aeron \
+    && cmake -S /tmp/aeron -B /tmp/aeron-build \
         -DCMAKE_BUILD_TYPE=Release \
         -Daeron_BUILD_SAMPLES=OFF \
         -Daeron_BUILD_TESTS=OFF \
