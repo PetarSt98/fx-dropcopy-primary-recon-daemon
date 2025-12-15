@@ -36,32 +36,44 @@ if(NOT aeron_FOUND)
 
   # Allow callers to hint a custom install root (e.g., /usr/local from a
   # source build) while still falling back to common prefixes.
-  set(_AERON_HINTS
+  set(_AERON_ROOT_CANDIDATES
       $ENV{AERON_ROOT}
       $ENV{AERON_HOME}
       /usr/local
-      /usr/local/lib
-      /usr/local/lib64
-      /usr/local/lib/x86_64-linux-gnu
       /usr
-      /usr/lib
-      /usr/lib64
-      /usr/lib/x86_64-linux-gnu
       /opt/homebrew
       /opt/local
   )
 
-  find_path(AERON_INCLUDE_DIR
-    NAMES aeron/Aeron.h
-    HINTS ${_AERON_HINTS}
-    PATH_SUFFIXES include include/aeron
-  )
+  set(AERON_INCLUDE_DIR "")
+  set(AERON_CLIENT_LIB "")
 
-  find_library(AERON_CLIENT_LIB
-    NAMES aeron_client aeron
-    HINTS ${_AERON_HINTS}
-    PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
-  )
+  foreach(_root IN LISTS _AERON_ROOT_CANDIDATES)
+    if(NOT _root)
+      continue()
+    endif()
+
+    set(_include_candidate "${_root}/include/aeron/Aeron.h")
+    if(EXISTS "${_include_candidate}")
+      set(AERON_INCLUDE_DIR "${_root}/include")
+    elseif(EXISTS "${_root}/include/Aeron.h")
+      set(AERON_INCLUDE_DIR "${_root}/include")
+    endif()
+
+    if(AERON_INCLUDE_DIR)
+      find_library(AERON_CLIENT_LIB
+        NAMES aeron_client aeron
+        PATHS
+          "${_root}/lib"
+          "${_root}/lib64"
+          "${_root}/lib/x86_64-linux-gnu"
+        NO_DEFAULT_PATH
+      )
+      if(AERON_CLIENT_LIB)
+        break()
+      endif()
+    endif()
+  endforeach()
 
   if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
     message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")

@@ -43,6 +43,7 @@ COPY --from=aeron-build /usr/local /usr/local
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/aeron.conf && ldconfig
 
 WORKDIR /workspace
+ENV AERON_ROOT=/usr/local
 COPY . .
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local \
     && cmake --build build --target fx_exec_recond fx_ingest_demo
