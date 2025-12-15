@@ -283,6 +283,34 @@ your environment or venue connectivity.
 11. Running tests locally (PowerShell or Bash)
 ---------------------------------------------
 
+**Local Aeron dependency for non-Docker builds**
+
+If `cmake --preset debug` fails with `Aeron client not found`, point CMake at an Aeron install that contains `include/` and
+`lib/` (or `lib64/`) directories:
+
+- PowerShell (Windows):
+  ```powershell
+  $env:AERON_ROOT = "C:/path/to/aeron"   # where include/aeron/Aeron.h and lib/libaeron_client.lib live
+  cmake --preset debug
+  ```
+
+- Bash (Linux/macOS):
+  ```bash
+  export AERON_ROOT=/opt/aeron
+  cmake --preset debug
+  ```
+
+To build Aeron yourself on Windows with minimal options:
+
+```powershell
+git clone https://github.com/real-logic/aeron.git
+cmake -S aeron -B aeron-build -DAERON_TESTS=OFF -DAERON_SMOKE_TESTS=OFF -DCMAKE_INSTALL_PREFIX="C:/deps/aeron"
+cmake --build aeron-build --config Release --target install
+$env:AERON_ROOT = "C:/deps/aeron"  # reuse for this project
+```
+
+CMake also honors `aeron_DIR` or `CMAKE_PREFIX_PATH` if you prefer those variables over `AERON_ROOT`.
+
 **Unit tests (mocked Aeron client)**
 
 - On Windows PowerShell (requires CMake/Ninja and Aeron headers/libs on the
