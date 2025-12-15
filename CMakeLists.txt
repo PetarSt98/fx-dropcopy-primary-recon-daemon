@@ -33,19 +33,35 @@ target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 find_package(aeron CONFIG QUIET)
 if(NOT aeron_FOUND)
   message(STATUS "Aeron config package not found; attempting manual discovery")
+
+  # Allow callers to hint a custom install root (e.g., /usr/local from a
+  # source build) while still falling back to common prefixes.
+  set(_AERON_HINTS
+      $ENV{AERON_ROOT}
+      $ENV{AERON_HOME}
+      /usr/local
+      /usr/local/lib
+      /usr/local/lib64
+      /usr/local/lib/x86_64-linux-gnu
+      /opt/homebrew
+      /opt/local)
+
   find_path(AERON_INCLUDE_DIR
     NAMES aeron/Aeron.h
-    PATH_SUFFIXES include
-    PATHS /usr/local /opt/homebrew /opt/local
+    HINTS ${_AERON_HINTS}
+    PATH_SUFFIXES include include/aeron
   )
+
   find_library(AERON_CLIENT_LIB
     NAMES aeron_client
-    PATH_SUFFIXES lib
-    PATHS /usr/local /opt/homebrew /opt/local
+    HINTS ${_AERON_HINTS}
+    PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
   )
+
   if(NOT AERON_INCLUDE_DIR OR NOT AERON_CLIENT_LIB)
-    message(FATAL_ERROR "Aeron client not found. Set aeron_DIR or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
+    message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
   endif()
+
   add_library(aeron::aeron_client UNKNOWN IMPORTED)
   set_target_properties(aeron::aeron_client PROPERTIES
     IMPORTED_LOCATION "${AERON_CLIENT_LIB}"
