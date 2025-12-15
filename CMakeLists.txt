@@ -81,8 +81,32 @@ if(NOT aeron_FOUND)
     message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
   endif()
 
+  # Resolve the header for debugging clarity and to catch layout surprises early.
+  find_file(AERON_HEADER_PATH
+            NAMES aeron/Aeron.h uk/co/real_logic/aeron/Aeron.h Aeron.h
+            HINTS "${AERON_INCLUDE_DIR}" "${AERON_INCLUDE_DIR}/include" "${AERON_INCLUDE_DIR}/aeron"
+            NO_CACHE)
+
+  if(NOT AERON_HEADER_PATH)
+    message(FATAL_ERROR "Aeron header not found under ${AERON_INCLUDE_DIR}; expected aeron/Aeron.h")
+  endif()
+
   message(STATUS "Aeron include dir: ${AERON_INCLUDE_DIR}")
   message(STATUS "Aeron client lib: ${AERON_CLIENT_LIB}")
+  message(STATUS "Aeron header: ${AERON_HEADER_PATH}")
+
+  # Prove the include path is usable before the main build to avoid late failures.
+  try_compile(AERON_HEADER_COMPILES
+              "${CMAKE_BINARY_DIR}/aeron_check"
+              SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_aeron_header.cpp"
+              CMAKE_FLAGS "-DCMAKE_CXX_STANDARD=23"
+                           "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
+                           "-DCMAKE_CXX_EXTENSIONS=OFF"
+                           "-DCMAKE_CXX_FLAGS=-I${AERON_INCLUDE_DIR}"
+              COPY_FILE "${CMAKE_BINARY_DIR}/aeron_check_bin")
+  if(NOT AERON_HEADER_COMPILES)
+    message(FATAL_ERROR "Failed to compile a test TU including <aeron/Aeron.h> with include path ${AERON_INCLUDE_DIR}")
+  endif()
 
   add_library(aeron::aeron_client UNKNOWN IMPORTED)
   set_target_properties(aeron::aeron_client PROPERTIES
@@ -101,7 +125,11 @@ add_executable(fx_exec_recond
 )
 target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
 if(AERON_INCLUDE_DIR)
-  target_include_directories(fx_exec_recond PRIVATE "${AERON_INCLUDE_DIR}")
+  target_include_directories(fx_exec_recond PRIVATE
+    "${AERON_INCLUDE_DIR}"
+    "${AERON_INCLUDE_DIR}/aeron"
+    "${AERON_INCLUDE_DIR}/include"
+  )
 endif()
 
 add_executable(unit_tests
