@@ -81,6 +81,9 @@ if(NOT aeron_FOUND)
     message(FATAL_ERROR "Aeron client not found. Set aeron_DIR, AERON_ROOT, or install the library so aeron/Aeron.h and libaeron_client are discoverable.")
   endif()
 
+  message(STATUS "Aeron include dir: ${AERON_INCLUDE_DIR}")
+  message(STATUS "Aeron client lib: ${AERON_CLIENT_LIB}")
+
   add_library(aeron::aeron_client UNKNOWN IMPORTED)
   set_target_properties(aeron::aeron_client PROPERTIES
     IMPORTED_LOCATION "${AERON_CLIENT_LIB}"
@@ -97,6 +100,9 @@ add_executable(fx_exec_recond
     src/core/reconciler.cpp
 )
 target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
+if(AERON_INCLUDE_DIR)
+  target_include_directories(fx_exec_recond PRIVATE "${AERON_INCLUDE_DIR}")
+endif()
 
 add_executable(unit_tests
     tests/all_tests.cpp
