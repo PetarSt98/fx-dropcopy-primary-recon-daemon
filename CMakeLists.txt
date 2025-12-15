@@ -55,7 +55,15 @@ if(NOT aeron_FOUND)
               "${_root}/include/Aeron.h"
               "${_root}/aeron/Aeron.h")
         if(EXISTS "${_hdr_candidate}" AND NOT AERON_INCLUDE_DIR)
-          get_filename_component(AERON_INCLUDE_DIR "${_hdr_candidate}" DIRECTORY)
+          get_filename_component(_hdr_dir "${_hdr_candidate}" DIRECTORY)
+          get_filename_component(_hdr_parent "${_hdr_dir}" DIRECTORY)
+          # Prefer the parent of the aeron/ directory when present so <aeron/Aeron.h>
+          # resolves correctly.
+          if(_hdr_candidate MATCHES "/include/aeron/Aeron.h$")
+            set(AERON_INCLUDE_DIR "${_hdr_parent}")
+          else()
+            set(AERON_INCLUDE_DIR "${_hdr_dir}")
+          endif()
         endif()
       endforeach()
 
