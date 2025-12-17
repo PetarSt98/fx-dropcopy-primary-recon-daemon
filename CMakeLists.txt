@@ -175,6 +175,7 @@ add_executable(unit_tests
     tests/from_wire_tests.cpp
     tests/aeron_subscriber_tests.cpp
     tests/test_main.hpp
+    src/ingest/aeron_subscriber.cpp
     src/ingest/fix_parser.cpp
     src/core/reconciler.cpp
 )
