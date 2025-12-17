@@ -1,32 +1,65 @@
 services:
   aeron-media-driver:
-    build: .
-    image: fx-recon:latest
-    entrypoint: ["/usr/local/bin/aeronmd"]
-    command: ["-Daeron.dir=/var/tmp/aeron", "-Daeron.socket.soReusePort=true"]
-    networks:
-      - recon-net
+    build:
+      context: .
+      target: runtime
+    image: fx-recon:runtime
+    command: ["aeronmd", "-Daeron.dir=/var/tmp/aeron", "-Daeron.socket.soReusePort=true"]
+    environment:
+      - AERON_DIR=/var/tmp/aeron
     volumes:
       - aeron-md-data:/var/tmp/aeron
+    networks:
+      - recon-net
     ports:
       - "20121:20121/udp"
       - "20122:20122/udp"
 
   recon-daemon:
-    image: fx-recon:latest
+    build:
+      context: .
+      target: runtime
+    image: fx-recon:runtime
     depends_on:
       - aeron-media-driver
-    networks:
-      - recon-net
     environment:
       - AERON_DIR=/var/tmp/aeron
     volumes:
       - aeron-md-data:/var/tmp/aeron
-    entrypoint: ["/usr/local/bin/fx_exec_recond"]
+    networks:
+      - recon-net
     command: ["aeron:udp?endpoint=aeron-media-driver:20121", "1001", "aeron:udp?endpoint=aeron-media-driver:20122", "1002"]
+
+  unit-tests:
+    build:
+      context: .
+      target: dev
+    image: fx-recon:dev
+    working_dir: /workspace
+    command: ["ctest", "--preset", "release", "--output-on-failure"]
+    profiles: ["test"]
+
+  integration-tests:
+    build:
+      context: .
+      target: dev
+    image: fx-recon:dev
+    working_dir: /workspace
+    command: ["tests/integration/run_aeron_flow.sh"]
+    profiles: ["test"]
+
+  dev-shell:
+    build:
+      context: .
+      target: dev
+    image: fx-recon:dev
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    profiles: ["dev"]
 
 networks:
   recon-net:
     driver: bridge
+
 volumes:
   aeron-md-data:
