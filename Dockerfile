@@ -46,7 +46,7 @@ WORKDIR /workspace
 ENV AERON_ROOT=/usr/local
 COPY . .
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/usr/local \
-    && cmake --build build --target fx_exec_recond fx_ingest_demo
+    && cmake --build build --target fx_exec_recond fx_ingest_demo fx_aeron_publisher
 
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
@@ -60,6 +60,7 @@ RUN apt-get update \
 COPY --from=aeron-build /usr/local /usr/local
 COPY --from=builder /workspace/build/fx_exec_recond /usr/local/bin/fx_exec_recond
 COPY --from=builder /workspace/build/fx_ingest_demo /usr/local/bin/fx_ingest_demo
+COPY --from=builder /workspace/build/fx_aeron_publisher /usr/local/bin/fx_aeron_publisher
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/aeron.conf && ldconfig
 
 ENV AERON_DIR=/var/tmp/aeron

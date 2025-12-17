@@ -279,3 +279,74 @@ docker compose up --build
 
 Tweak the Aeron channel endpoints/stream IDs in `docker-compose.yml` to match
 your environment or venue connectivity.
+
+11. Running tests locally (PowerShell or Bash)
+---------------------------------------------
+
+**Local Aeron dependency for non-Docker builds**
+
+If `cmake --preset debug` fails with `Aeron client not found`, point CMake at an Aeron install that contains `include/` and
+`lib/` (or `lib64/`) directories:
+
+- PowerShell (Windows):
+  ```powershell
+  $env:AERON_ROOT = "C:/path/to/aeron"   # where include/aeron/Aeron.h and lib/libaeron_client.lib live
+  cmake --preset debug
+  ```
+
+- Bash (Linux/macOS):
+  ```bash
+  export AERON_ROOT=/opt/aeron
+  cmake --preset debug
+  ```
+
+To build Aeron yourself on Windows with minimal options:
+
+```powershell
+git clone https://github.com/real-logic/aeron.git
+cmake -S aeron -B aeron-build -DAERON_TESTS=OFF -DAERON_SMOKE_TESTS=OFF -DCMAKE_INSTALL_PREFIX="C:/deps/aeron"
+cmake --build aeron-build --config Release --target install
+$env:AERON_ROOT = "C:/deps/aeron"  # reuse for this project
+```
+
+CMake also honors `aeron_DIR` or `CMAKE_PREFIX_PATH` if you prefer those variables over `AERON_ROOT`.
+
+**Unit tests (mocked Aeron client)**
+
+- On Windows PowerShell (requires CMake/Ninja and Aeron headers/libs on the
+  host path via `AERON_ROOT`, `aeron_DIR`, or system install):
+
+  ```powershell
+  cmake --preset debug
+  cmake --build --preset debug --target unit_tests
+  .\build\debug\unit_tests.exe
+  ```
+
+- On Bash/Linux:
+
+  ```bash
+  cmake --preset debug
+  cmake --build --preset debug --target unit_tests
+  ./build/debug/unit_tests
+  ```
+
+**Integration (Aeron flow) tests**
+
+These spin up the Aeron media driver, publisher, and recon daemon inside
+containers. Run from a Bash shell (WSL/Git Bash on Windows works) so the
+helper script can invoke Docker Compose for you:
+
+```bash
+./tests/integration/run_aeron_flow.sh
+```
+
+If you prefer raw Docker Compose commands from PowerShell, mirror the script:
+
+```powershell
+docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml down -v --remove-orphans
+docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml build
+docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml up --no-color --attach-dependencies
+```
+
+Inspect the `recon-daemon` logs for “Reconciler consumed” counters to confirm
+ingestion succeeded; the helper script performs the same check automatically.

@@ -13,6 +13,21 @@ AeronSubscriber::AeronSubscriber(std::string channel,
                                  core::Source source,
                                  std::shared_ptr<aeron::Aeron> client,
                                  std::atomic<bool>& stop_flag) noexcept
+    : AeronSubscriber(std::move(channel),
+                      stream_id,
+                      ring,
+                      stats,
+                      source,
+                      make_aeron_client_view(std::move(client)),
+                      stop_flag) {}
+
+AeronSubscriber::AeronSubscriber(std::string channel,
+                                 std::int32_t stream_id,
+                                 Ring& ring,
+                                 ThreadStats& stats,
+                                 core::Source source,
+                                 std::shared_ptr<AeronClientView> client,
+                                 std::atomic<bool>& stop_flag) noexcept
     : channel_(std::move(channel))
     , stream_id_(stream_id)
     , ring_(ring)
@@ -25,20 +40,31 @@ void AeronSubscriber::run() {
     using namespace aeron;
     constexpr int fragment_limit = 10;
 
-    std::shared_ptr<Subscription> subscription =
-        client_->addSubscription(channel_, stream_id_);
+    const auto registration_id = client_->add_subscription(channel_, stream_id_);
+
+    std::shared_ptr<SubscriptionView> subscription;
+    while (!stop_flag_.load(std::memory_order_acquire) && !subscription) {
+        subscription = client_->find_subscription(registration_id);
+        if (!subscription) {
+            std::this_thread::yield();
+        }
+    }
+
+    if (!subscription) {
+        return;
+    }
 
     auto handler = [&](const concurrent::AtomicBuffer& buffer,
-                       util::index_t offset,
-                       util::index_t length,
-                       const Header&) {
-        if (length != static_cast<util::index_t>(sizeof(core::WireExecEvent))) {
+                       aeron::util::index_t offset,
+                       aeron::util::index_t length,
+                       const concurrent::logbuffer::Header&) {
+        if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
             ++stats_.parse_failures;
             return;
         }
 
         const auto* wire = reinterpret_cast<const core::WireExecEvent*>(buffer.buffer() + offset);
-        const core::ExecEvent evt = core::from_wire(*wire, source_, util::rdtsc());
+        const core::ExecEvent evt = core::from_wire(*wire, source_, ::util::rdtsc());
         if (!ring_.try_push(evt)) {
             ++stats_.drops;
         } else {
