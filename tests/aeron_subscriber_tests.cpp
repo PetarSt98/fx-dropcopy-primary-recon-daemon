@@ -12,7 +12,7 @@
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_client_view.hpp"
 #include "ingest/aeron_subscriber.hpp"
-#include "tests/test_main.hpp"
+#include "test_main.hpp"
 
 namespace aeron_subscriber_tests {
 namespace {
