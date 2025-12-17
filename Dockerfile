@@ -4,7 +4,10 @@
 FROM ubuntu:22.04 AS build-base
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+# Avoid transient mirror inconsistencies by skipping backports, which are not required
+# for this project.
+RUN sed -i '/backports/d' /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
@@ -55,7 +58,10 @@ CMD ["bash"]
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+# Avoid transient mirror inconsistencies by skipping backports, which are not required
+# for this project.
+RUN sed -i '/backports/d' /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libstdc++6 \
