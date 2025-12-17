@@ -5,8 +5,8 @@
 #include <thread>
 #include <vector>
 
-#include <aeron/AtomicBuffer.h>
-#include <aeron/concurrent/logbuffer/Header.h>
+#include <concurrent/AtomicBuffer.h>
+#include <concurrent/logbuffer/Header.h>
 
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
