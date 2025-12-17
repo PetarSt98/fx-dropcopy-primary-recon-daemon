@@ -179,7 +179,7 @@ add_executable(unit_tests
     src/core/reconciler.cpp
 )
 target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(unit_tests PRIVATE fx_core)
+target_link_libraries(unit_tests PRIVATE fx_core aeron::aeron_client)
 
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
