@@ -31,6 +31,46 @@ docker compose run --rm --profile test integration-tests
 docker compose run --rm --profile dev dev-shell
 ```
 
+CI/CD
+-----
+
+GitHub Actions runs the same Docker flows used locally. The workflow at `.github/workflows/ci.yml` builds the images, runs the unit suite, runs the Aeron integration flow, and then tears everything down:
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env: { DOCKER_BUILDKIT: 1 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose build
+      - run: docker compose run --rm --profile test unit-tests
+      - run: docker compose run --rm --profile test integration-tests
+      - run: docker compose down --volumes --remove-orphans
+        if: always()
+```
+
+You do **not** need Jenkins if GitHub Actions is available. If you prefer Jenkins, point a Docker-enabled agent at this repo and use a simple pipeline:
+
+```groovy
+pipeline {
+  agent any
+  environment { DOCKER_BUILDKIT = '1' }
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+    stage('Build images') { steps { sh 'docker compose build' } }
+    stage('Unit tests') { steps { sh 'docker compose run --rm --profile test unit-tests' } }
+    stage('Integration tests') { steps { sh 'docker compose run --rm --profile test integration-tests' } }
+  }
+  post { always { sh 'docker compose down --volumes --remove-orphans || true' } }
+}
+```
+
+Both GitHub Actions and Jenkins rely on the same `docker compose` commands shown in the quickstart, so the pipeline mirrors the developer workflow.
+
 It ingests high-throughput execution streams from:
   - Primary execution sessions (OMS / gateway)
   - Drop-copy / exchange execution reports
