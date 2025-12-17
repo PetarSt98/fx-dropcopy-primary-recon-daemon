@@ -6,7 +6,9 @@
 #include <vector>
 
 #include <concurrent/AtomicBuffer.h>
+#include <concurrent/logbuffer/FrameDescriptor.h>
 #include <concurrent/logbuffer/Header.h>
+#include <concurrent/logbuffer/LogBufferDescriptor.h>
 
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
@@ -30,7 +32,10 @@ struct StubSubscription final : public ingest::SubscriptionView {
             auto frag = std::move(fragments_.front());
             fragments_.erase(fragments_.begin());
             aeron::concurrent::AtomicBuffer buffer(frag.payload.data(), frag.payload.size());
-            aeron::concurrent::logbuffer::Header header;
+            aeron::concurrent::logbuffer::Header header(
+                /*initialTermId=*/0,
+                /*capacity=*/static_cast<aeron::util::index_t>(frag.payload.size()),
+                /*context=*/nullptr);
             handler(buffer, 0, static_cast<aeron::util::index_t>(frag.payload.size()), header);
             ++handled;
         }
