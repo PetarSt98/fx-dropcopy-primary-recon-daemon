@@ -7,8 +7,8 @@
 
 #include <concurrent/AtomicBuffer.h>
 #include <concurrent/logbuffer/FrameDescriptor.h>
-#include <concurrent/logbuffer/Header.h>
 #include <concurrent/logbuffer/LogBufferDescriptor.h>
+#include <concurrent/logbuffer/Header.h>
 
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
