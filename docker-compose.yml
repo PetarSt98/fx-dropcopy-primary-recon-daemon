@@ -37,6 +37,9 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["ctest", "--preset", "release", "--output-on-failure"]
+    environment:
+      - AERON_DIR=/dev/shm/aeron-root
+    shm_size: 256m
 
   integration-tests:
     build:
@@ -45,6 +48,9 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["tests/integration/run_aeron_flow.sh"]
+    environment:
+      - AERON_DIR=/dev/shm/aeron-root
+    shm_size: 256m
 
   dev-shell:
     build:
@@ -53,6 +59,9 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["sleep", "infinity"]
+    environment:
+      - AERON_DIR=/dev/shm/aeron-root
+    shm_size: 256m
 
 networks:
   recon-net:
