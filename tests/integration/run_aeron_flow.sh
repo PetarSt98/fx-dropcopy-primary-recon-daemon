@@ -29,7 +29,20 @@ trap cleanup EXIT
 AERON_DIR=${AERON_DIR} aeronmd -Daeron.dir=${AERON_DIR} -Daeron.socket.soReusePort=true \
   >/tmp/aeronmd.log 2>&1 &
 MEDIA_DRIVER_PID=$!
-sleep 1
+
+# Wait for the CnC file to appear so clients don't race the driver startup
+for _ in {1..50}; do
+  if [[ -f "${AERON_DIR}/cnc.dat" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ ! -f "${AERON_DIR}/cnc.dat" ]]; then
+  echo "Aeron media driver did not produce cnc.dat in ${AERON_DIR}" >&2
+  cat /tmp/aeronmd.log || true
+  exit 1
+fi
 
 # Launch recon daemon with a bounded run window so the test exits deterministically
 AERON_DIR=${AERON_DIR} RECOND_RUN_MS=${RECOND_RUN_MS} fx_exec_recond "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} \
