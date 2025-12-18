@@ -10,6 +10,7 @@ DROPCOPY_STREAM=1002
 
 mkdir -p "${AERON_DIR}"
 rm -rf "${AERON_DIR}"/*
+export AERON_DIR
 
 cleanup() {
   local code=$?
@@ -31,13 +32,13 @@ MEDIA_DRIVER_PID=$!
 sleep 1
 
 # Launch recon daemon with a bounded run window so the test exits deterministically
-RECOND_RUN_MS=${RECOND_RUN_MS} fx_exec_recond "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} \
+AERON_DIR=${AERON_DIR} RECOND_RUN_MS=${RECOND_RUN_MS} fx_exec_recond "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} \
   >/tmp/recon.log 2>&1 &
 RECON_PID=$!
 
 # Publish a handful of fragments on both channels
-fx_aeron_publisher "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} 8 10
-fx_aeron_publisher "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} 8 10
+AERON_DIR=${AERON_DIR} fx_aeron_publisher "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} 8 10
+AERON_DIR=${AERON_DIR} fx_aeron_publisher "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} 8 10
 
 # Wait for the recon daemon to finish and inspect its logs
 if ! timeout 15s bash -c "wait ${RECON_PID}"; then
