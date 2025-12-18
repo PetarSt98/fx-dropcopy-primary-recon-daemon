@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AERON_DIR=${AERON_DIR:-/var/tmp/aeron}
+AERON_DIR=${AERON_DIR:-/dev/shm/aeron-root}
 RECOND_RUN_MS=${RECOND_RUN_MS:-3000}
 PRIMARY_CHANNEL="aeron:udp?endpoint=localhost:20121"
 DROPCOPY_CHANNEL="aeron:udp?endpoint=localhost:20122"
