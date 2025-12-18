@@ -3,6 +3,8 @@ set -euo pipefail
 
 AERON_DIR=${AERON_DIR:-/dev/shm/aeron-root}
 RECOND_RUN_MS=${RECOND_RUN_MS:-3000}
+RECON_TIMEOUT_SECONDS=${RECON_TIMEOUT_SECONDS:-30}
+PUB_TIMEOUT_SECONDS=${PUB_TIMEOUT_SECONDS:-10}
 PRIMARY_CHANNEL="aeron:udp?endpoint=localhost:20121"
 DROPCOPY_CHANNEL="aeron:udp?endpoint=localhost:20122"
 PRIMARY_STREAM=1001
@@ -44,18 +46,20 @@ if [[ ! -f "${AERON_DIR}/cnc.dat" ]]; then
   exit 1
 fi
 
-# Launch recon daemon with a bounded run window so the test exits deterministically
-AERON_DIR=${AERON_DIR} RECOND_RUN_MS=${RECOND_RUN_MS} fx_exec_recond "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} \
+# Launch recon daemon with a bounded run window and hard timeout so the test exits deterministically
+timeout ${RECON_TIMEOUT_SECONDS}s env AERON_DIR=${AERON_DIR} RECOND_RUN_MS=${RECOND_RUN_MS} \
+  fx_exec_recond "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} \
   >/tmp/recon.log 2>&1 &
 RECON_PID=$!
 
-# Publish a handful of fragments on both channels
-AERON_DIR=${AERON_DIR} fx_aeron_publisher "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} 8 10
-AERON_DIR=${AERON_DIR} fx_aeron_publisher "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} 8 10
+# Publish a handful of fragments on both channels with timeouts to avoid hangs
+timeout ${PUB_TIMEOUT_SECONDS}s env AERON_DIR=${AERON_DIR} fx_aeron_publisher "${PRIMARY_CHANNEL}" ${PRIMARY_STREAM} 8 10
+timeout ${PUB_TIMEOUT_SECONDS}s env AERON_DIR=${AERON_DIR} fx_aeron_publisher "${DROPCOPY_CHANNEL}" ${DROPCOPY_STREAM} 8 10
 
 # Wait for the recon daemon to finish and inspect its logs
-if ! timeout 15s bash -c "wait ${RECON_PID}"; then
-  echo "Recon daemon did not exit within timeout" >&2
+if ! wait ${RECON_PID}; then
+  echo "Recon daemon exited with an error" >&2
+  cat /tmp/recon.log || true
   exit 1
 fi
 
