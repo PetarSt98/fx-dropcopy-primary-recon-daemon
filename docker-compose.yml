@@ -37,7 +37,6 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["ctest", "--preset", "release", "--output-on-failure"]
-    profiles: ["test"]
 
   integration-tests:
     build:
@@ -46,7 +45,6 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["tests/integration/run_aeron_flow.sh"]
-    profiles: ["test"]
 
   dev-shell:
     build:
@@ -55,7 +53,6 @@ services:
     image: fx-recon:dev
     working_dir: /workspace
     command: ["sleep", "infinity"]
-    profiles: ["dev"]
 
 networks:
   recon-net:

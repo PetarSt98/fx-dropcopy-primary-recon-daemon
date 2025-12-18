@@ -22,10 +22,10 @@ jobs:
         run: docker compose build
 
       - name: Run unit tests
-        run: docker compose run --rm --profile test unit-tests
+        run: docker compose run --rm unit-tests
 
       - name: Run integration tests
-        run: docker compose run --rm --profile test integration-tests
+        run: docker compose run --rm integration-tests
 
       - name: Cleanup
         if: always()
