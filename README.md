@@ -4,6 +4,73 @@ Repository: fx-exec-state-recon-daemon
 
 FX Execution State Reconciliation Service (drop-copy vs primary, lock-free daemon) is a C++ infrastructure component for FX trading systems.
 
+Docker quickstart
+-----------------
+
+Everything needed to build, run, and test the daemon lives inside Docker containers. The `Dockerfile` produces two images:
+
+* `fx-recon:dev` (build/test/debug): includes the toolchain, Aeron, and the compiled build tree.
+* `fx-recon:runtime` (minimal run image): contains only the runtime bits to launch the daemon or media driver.
+
+Key commands using the simplified `docker-compose.yml`:
+
+```bash
+# Build both images (dev + runtime)
+docker compose build
+
+# Run the daemon wired to an Aeron media driver
+docker compose up recon-daemon
+
+# Run unit + integration tests (ctest preset)
+docker compose run --rm --profile test unit-tests
+
+# Run the Aeron flow integration test directly
+docker compose run --rm --profile test integration-tests
+
+# Get an interactive shell with the compiled tree for debugging
+docker compose run --rm --profile dev dev-shell
+```
+
+CI/CD
+-----
+
+GitHub Actions runs the same Docker flows used locally. The workflow at `.github/workflows/ci.yml` builds the images, runs the unit suite, runs the Aeron integration flow, and then tears everything down:
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env: { DOCKER_BUILDKIT: 1 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose build
+      - run: docker compose run --rm --profile test unit-tests
+      - run: docker compose run --rm --profile test integration-tests
+      - run: docker compose down --volumes --remove-orphans
+        if: always()
+```
+
+You do **not** need Jenkins if GitHub Actions is available. If you prefer Jenkins, point a Docker-enabled agent at this repo and use a simple pipeline:
+
+```groovy
+pipeline {
+  agent any
+  environment { DOCKER_BUILDKIT = '1' }
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+    stage('Build images') { steps { sh 'docker compose build' } }
+    stage('Unit tests') { steps { sh 'docker compose run --rm --profile test unit-tests' } }
+    stage('Integration tests') { steps { sh 'docker compose run --rm --profile test integration-tests' } }
+  }
+  post { always { sh 'docker compose down --volumes --remove-orphans || true' } }
+}
+```
+
+Both GitHub Actions and Jenkins rely on the same `docker compose` commands shown in the quickstart, so the pipeline mirrors the developer workflow.
+
 It ingests high-throughput execution streams from:
   - Primary execution sessions (OMS / gateway)
   - Drop-copy / exchange execution reports
@@ -332,21 +399,14 @@ CMake also honors `aeron_DIR` or `CMAKE_PREFIX_PATH` if you prefer those variabl
 
 **Integration (Aeron flow) tests**
 
-These spin up the Aeron media driver, publisher, and recon daemon inside
-containers. Run from a Bash shell (WSL/Git Bash on Windows works) so the
-helper script can invoke Docker Compose for you:
+Run the integration flow fully inside Docker using the single top-level
+compose file (no extra compose overlays required):
 
 ```bash
-./tests/integration/run_aeron_flow.sh
+docker compose build --profile test
+docker compose run --rm --profile test integration-tests
 ```
 
-If you prefer raw Docker Compose commands from PowerShell, mirror the script:
-
-```powershell
-docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml down -v --remove-orphans
-docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml build
-docker compose -f docker-compose.yml -f tests/integration/docker-compose.it.yml up --no-color --attach-dependencies
-```
-
-Inspect the `recon-daemon` logs for “Reconciler consumed” counters to confirm
-ingestion succeeded; the helper script performs the same check automatically.
+The `integration-tests` service starts an embedded Aeron media driver and
+launches the recon daemon and publishers inside the container, then verifies
+the “Reconciler consumed” counters in the recon logs.
