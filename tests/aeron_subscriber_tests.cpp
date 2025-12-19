@@ -77,7 +77,7 @@ core::WireExecEvent make_wire() {
 }
 
 bool test_subscriber_delivers_fragment() {
-    ingest::Ring ring;
+    auto ring = std::make_unique<ingest::Ring>();
     ingest::ThreadStats stats;
     std::atomic<bool> stop{false};
 
@@ -88,7 +88,7 @@ bool test_subscriber_delivers_fragment() {
     auto stub_sub = std::make_shared<StubSubscription>(std::vector{StubSubscription::Fragment{std::move(payload)}});
     auto client = std::make_shared<StubAeronClient>(stub_sub, 1);
 
-    ingest::AeronSubscriber subscriber("", 1, ring, stats, core::Source::Primary, client, stop);
+    ingest::AeronSubscriber subscriber("", 1, *ring, stats, core::Source::Primary, client, stop);
 
     std::thread t([&] { subscriber.run(); });
     while (stats.produced == 0) {
@@ -98,11 +98,11 @@ bool test_subscriber_delivers_fragment() {
     t.join();
 
     core::ExecEvent evt{};
-    return ring.try_pop(evt) && stats.produced == 1 && evt.exec_id[0] == 'E';
+    return ring->try_pop(evt) && stats.produced == 1 && evt.exec_id[0] == 'E';
 }
 
 bool test_subscriber_counts_parse_failure() {
-    ingest::Ring ring;
+    auto ring = std::make_unique<ingest::Ring>();
     ingest::ThreadStats stats;
     std::atomic<bool> stop{false};
 
@@ -110,7 +110,7 @@ bool test_subscriber_counts_parse_failure() {
     auto stub_sub = std::make_shared<StubSubscription>(std::vector{StubSubscription::Fragment{std::move(payload)}});
     auto client = std::make_shared<StubAeronClient>(stub_sub, 0);
 
-    ingest::AeronSubscriber subscriber("", 1, ring, stats, core::Source::Primary, client, stop);
+    ingest::AeronSubscriber subscriber("", 1, *ring, stats, core::Source::Primary, client, stop);
 
     std::thread t([&] { subscriber.run(); });
     while (stats.parse_failures == 0) {
@@ -119,7 +119,7 @@ bool test_subscriber_counts_parse_failure() {
     stop.store(true, std::memory_order_release);
     t.join();
 
-    return stats.parse_failures == 1 && ring.size_approx() == 0;
+    return stats.parse_failures == 1 && ring->size_approx() == 0;
 }
 
 } // namespace

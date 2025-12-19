@@ -47,7 +47,7 @@ services:
       target: dev
     image: fx-recon:dev
     working_dir: /workspace
-    command: ["tests/integration/run_aeron_flow.sh"]
+    command: ["ctest", "--preset", "release", "--output-on-failure", "-R", "integration_aeron_flow"]
     environment:
       - AERON_DIR=/dev/shm/aeron-root
     shm_size: 256m
