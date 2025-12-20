@@ -8,8 +8,9 @@ namespace core {
 Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
                        ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
+                       OrderStateStore& store,
                        ReconCounters& counters) noexcept
-    : stop_flag_(stop_flag), primary_(primary), dropcopy_(dropcopy), counters_(counters) {}
+    : stop_flag_(stop_flag), primary_(primary), dropcopy_(dropcopy), store_(store), counters_(counters) {}
 
 void Reconciler::run() {
     ExecEvent evt{};
@@ -18,10 +19,16 @@ void Reconciler::run() {
         bool consumed = false;
         if (primary_.try_pop(evt)) {
             ++counters_.consumed_primary;
+            if (!store_.upsert(evt)) {
+                ++counters_.store_overflow;
+            }
             consumed = true;
         }
         if (dropcopy_.try_pop(evt)) {
             ++counters_.consumed_dropcopy;
+            if (!store_.upsert(evt)) {
+                ++counters_.store_overflow;
+            }
             consumed = true;
         }
         if (!consumed) {

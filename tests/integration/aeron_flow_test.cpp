@@ -16,9 +16,11 @@
 #include <Aeron.h>
 #include <concurrent/AtomicBuffer.h>
 
+#include "core/order_state_store.hpp"
 #include "core/reconciler.hpp"
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_subscriber.hpp"
+#include "util/arena.hpp"
 
 namespace {
 
@@ -190,12 +192,15 @@ int main() {
         ingest::ThreadStats dropcopy_stats;
         core::ReconCounters counters;
         std::atomic<bool> stop_flag{false};
+        util::Arena arena(util::Arena::default_capacity_bytes);
+        constexpr std::size_t order_capacity_hint = 1u << 12;
+        core::OrderStateStore store(arena, order_capacity_hint);
 
         aeron::Context context;
         context.aeronDir(aeron_dir.string());
         auto client = aeron::Aeron::connect(context);
 
-        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, counters);
+        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters);
         ingest::AeronSubscriber primary_sub(primary_channel,
                                             primary_stream,
                                             *primary_ring,

@@ -7,8 +7,10 @@
 
 #include "core/exec_event.hpp"
 #include "core/reconciler.hpp"
+#include "core/order_state_store.hpp"
 #include "ingest/fix_parser.hpp"
 #include "ingest/spsc_ring.hpp"
+#include "util/arena.hpp"
 #include "util/log.hpp"
 #include "util/soh.hpp"
 
@@ -64,8 +66,11 @@ int main() {
     ThreadStats primary_stats;
     ThreadStats dropcopy_stats;
     core::ReconCounters counters;
+    util::Arena arena(util::Arena::default_capacity_bytes);
+    constexpr std::size_t order_capacity_hint = 1u << 14;
+    core::OrderStateStore store(arena, order_capacity_hint);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, counters);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters);
 
     std::thread primary([&] { ingest_thread(stop_flag, primary_ring, primary_stats, core::Source::Primary); });
     std::thread dropcopy([&] { ingest_thread(stop_flag, dropcopy_ring, dropcopy_stats, core::Source::DropCopy); });

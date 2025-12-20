@@ -20,6 +20,7 @@ add_library(fx_core
     src/core/exec_event.hpp
     src/core/wire_exec_event.hpp
     src/core/order_state.hpp
+    src/core/order_state_store.cpp
     src/core/reconciler.cpp
     src/util/rdtsc.hpp
     src/util/log.hpp
@@ -177,10 +178,12 @@ add_executable(unit_tests
     tests/aeron_subscriber_tests.cpp
     tests/arena_tests.cpp
     tests/order_state_tests.cpp
+    tests/order_state_store_tests.cpp
     tests/test_main.hpp
     src/ingest/aeron_subscriber.cpp
     src/ingest/fix_parser.cpp
     src/core/reconciler.cpp
+    src/core/order_state_store.cpp
 )
 target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_link_libraries(unit_tests PRIVATE fx_core aeron::aeron_client)
