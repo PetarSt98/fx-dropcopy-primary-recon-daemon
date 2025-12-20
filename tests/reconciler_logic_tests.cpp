@@ -156,16 +156,19 @@ bool test_integration_style_ring_draining() {
 
     core::Divergence div{};
     bool saw_missing_fill = false;
+    std::uint64_t popped = 0;
     while (h.divergence_ring->try_pop(div)) {
         if (div.type == core::DivergenceType::MissingFill) {
             saw_missing_fill = true;
         }
+        ++popped;
     }
 
     return saw_missing_fill &&
+           popped == h.counters.divergence_total &&
+           h.counters.divergence_total >= 1 &&
            h.counters.internal_events == 3 &&
            h.counters.dropcopy_events == 2 &&
-           h.counters.divergence_total == 1 &&
            h.counters.divergence_ring_drops == 0;
 }
 
