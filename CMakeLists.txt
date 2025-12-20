@@ -182,9 +182,15 @@ add_executable(unit_tests
 target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_link_libraries(unit_tests PRIVATE fx_core aeron::aeron_client)
 
+add_executable(integration_aeron_flow
+    tests/integration/aeron_flow_test.cpp
+    src/ingest/aeron_subscriber.cpp
+)
+target_link_libraries(integration_aeron_flow PRIVATE fx_core aeron::aeron_client)
+
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
 
 enable_testing()
 add_test(NAME unit_tests COMMAND unit_tests)
-add_test(NAME integration_aeron_flow COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/run_aeron_flow.sh)
+add_test(NAME integration_aeron_flow COMMAND integration_aeron_flow)
