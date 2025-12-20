@@ -6,6 +6,7 @@ namespace wire_exec_tests { void add_tests(std::vector<TestCase>& tests); }
 namespace aeron_subscriber_tests { void add_tests(std::vector<TestCase>& tests); }
 namespace arena_tests { void add_tests(std::vector<TestCase>& tests); }
 namespace order_state_tests { void add_tests(std::vector<TestCase>& tests); }
+namespace order_state_store_tests { void add_tests(std::vector<TestCase>& tests); }
 
 int main() {
     std::vector<TestCase> tests;
@@ -15,5 +16,6 @@ int main() {
     aeron_subscriber_tests::add_tests(tests);
     arena_tests::add_tests(tests);
     order_state_tests::add_tests(tests);
+    order_state_store_tests::add_tests(tests);
     return run_tests(tests);
 }
