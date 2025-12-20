@@ -19,6 +19,7 @@ add_library(fx_core
     src/ingest/aeron_client_view.hpp
     src/core/exec_event.hpp
     src/core/wire_exec_event.hpp
+    src/core/order_state.hpp
     src/core/reconciler.cpp
     src/util/rdtsc.hpp
     src/util/log.hpp
@@ -174,6 +175,8 @@ add_executable(unit_tests
     tests/fix_parser_tests.cpp
     tests/from_wire_tests.cpp
     tests/aeron_subscriber_tests.cpp
+    tests/arena_tests.cpp
+    tests/order_state_tests.cpp
     tests/test_main.hpp
     src/ingest/aeron_subscriber.cpp
     src/ingest/fix_parser.cpp
