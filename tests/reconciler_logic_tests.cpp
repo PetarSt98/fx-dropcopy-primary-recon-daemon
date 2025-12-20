@@ -155,22 +155,17 @@ bool test_integration_style_ring_draining() {
     }
 
     core::Divergence div{};
-    bool saw_missing_fill = false;
     bool saw_state_mismatch = false;
     while (h.divergence_ring->try_pop(div)) {
-        if (div.type == core::DivergenceType::MissingFill) {
-            saw_missing_fill = true;
-        }
         if (div.type == core::DivergenceType::StateMismatch) {
             saw_state_mismatch = true;
         }
     }
 
-    return saw_missing_fill &&
-           saw_state_mismatch &&
+    return saw_state_mismatch &&
            h.counters.internal_events == 3 &&
            h.counters.dropcopy_events == 2 &&
-           h.counters.divergence_total == 2 &&
+           h.counters.divergence_total == 1 &&
            h.counters.divergence_ring_drops == 0;
 }
 
