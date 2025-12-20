@@ -5,6 +5,8 @@
 #include <array>
 #include <cstring>
 
+#include "core/wire_exec_event.hpp"
+
 namespace core {
 
 enum class Source : uint8_t { Primary = 0, DropCopy = 1 };
@@ -46,5 +48,37 @@ struct ExecEvent {
         exec_id_len = l;
     }
 };
+
+inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_tsc) noexcept {
+    static_assert(ExecEvent::id_capacity == WireExecEvent::id_capacity,
+                  "ExecEvent and WireExecEvent must agree on id capacity");
+    ExecEvent evt{};
+    evt.source = src;
+    evt.exec_type = static_cast<ExecType>(w.exec_type);
+    evt.ord_status = static_cast<OrdStatus>(w.ord_status);
+    evt.price_micro = w.price_micro;
+    evt.qty = w.qty;
+    evt.cum_qty = w.cum_qty;
+    evt.sending_time = w.sending_time;
+    evt.transact_time = w.transact_time;
+    evt.ingest_tsc = ingest_tsc;
+
+    const auto exec_len = static_cast<std::size_t>(
+        w.exec_id_len > WireExecEvent::id_capacity ? WireExecEvent::id_capacity : w.exec_id_len);
+    std::memcpy(evt.exec_id, w.exec_id, exec_len);
+    evt.exec_id_len = exec_len;
+
+    const auto order_len = static_cast<std::size_t>(
+        w.order_id_len > WireExecEvent::id_capacity ? WireExecEvent::id_capacity : w.order_id_len);
+    std::memcpy(evt.order_id, w.order_id, order_len);
+    evt.order_id_len = order_len;
+
+    const auto clord_len = static_cast<std::size_t>(
+        w.clord_id_len > WireExecEvent::id_capacity ? WireExecEvent::id_capacity : w.clord_id_len);
+    std::memcpy(evt.clord_id, w.clord_id, clord_len);
+    evt.clord_id_len = clord_len;
+
+    return evt;
+}
 
 } // namespace core

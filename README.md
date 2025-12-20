@@ -4,6 +4,73 @@ Repository: fx-exec-state-recon-daemon
 
 FX Execution State Reconciliation Service (drop-copy vs primary, lock-free daemon) is a C++ infrastructure component for FX trading systems.
 
+Docker quickstart
+-----------------
+
+Everything needed to build, run, and test the daemon lives inside Docker containers. The `Dockerfile` produces two images:
+
+* `fx-recon:dev` (build/test/debug): includes the toolchain, Aeron, and the compiled build tree.
+* `fx-recon:runtime` (minimal run image): contains only the runtime bits to launch the daemon or media driver.
+
+Key commands using the simplified `docker-compose.yml`:
+
+```bash
+# Build both images (dev + runtime)
+docker compose build
+
+# Run the daemon wired to an Aeron media driver
+docker compose up recon-daemon
+
+# Run unit + integration tests (ctest preset)
+docker compose run --rm --profile test unit-tests
+
+# Run the Aeron flow integration test directly
+docker compose run --rm --profile test integration-tests
+
+# Get an interactive shell with the compiled tree for debugging
+docker compose run --rm --profile dev dev-shell
+```
+
+CI/CD
+-----
+
+GitHub Actions runs the same Docker flows used locally. The workflow at `.github/workflows/ci.yml` builds the images, runs the unit suite, runs the Aeron integration flow, and then tears everything down:
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env: { DOCKER_BUILDKIT: 1 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose build
+      - run: docker compose run --rm --profile test unit-tests
+      - run: docker compose run --rm --profile test integration-tests
+      - run: docker compose down --volumes --remove-orphans
+        if: always()
+```
+
+You do **not** need Jenkins if GitHub Actions is available. If you prefer Jenkins, point a Docker-enabled agent at this repo and use a simple pipeline:
+
+```groovy
+pipeline {
+  agent any
+  environment { DOCKER_BUILDKIT = '1' }
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+    stage('Build images') { steps { sh 'docker compose build' } }
+    stage('Unit tests') { steps { sh 'docker compose run --rm --profile test unit-tests' } }
+    stage('Integration tests') { steps { sh 'docker compose run --rm --profile test integration-tests' } }
+  }
+  post { always { sh 'docker compose down --volumes --remove-orphans || true' } }
+}
+```
+
+Both GitHub Actions and Jenkins rely on the same `docker compose` commands shown in the quickstart, so the pipeline mirrors the developer workflow.
+
 It ingests high-throughput execution streams from:
   - Primary execution sessions (OMS / gateway)
   - Drop-copy / exchange execution reports
@@ -252,3 +319,94 @@ The goal of this repository is to:
 
 It is intentionally not a toy matching engine or generic simulator; it focuses on a real, essential piece of infrastructure that serious FX trading firms actually need to get right.
 
+
+10. Containerized build and runtime
+-----------------------------------
+
+The repository ships with a multi-stage `Dockerfile` that builds Aeron and the
+reconciliation binaries, plus a `docker-compose.yml` that co-locates an Aeron
+media driver with the recon daemon for easy bring-up.
+
+Build the image locally:
+
+```
+docker build -t fx-recon:latest .
+```
+
+The Dockerfile clones the Aeron tag (instead of using a tarball) so Gradle sees
+Git metadata when producing the Java media driver artifacts; this avoids build
+breaks during the Aeron Java/JNI packaging stage.
+
+Launch the media driver and reconciler with the sample Aeron channels/stream IDs
+from compose:
+
+```
+docker compose up --build
+```
+
+Tweak the Aeron channel endpoints/stream IDs in `docker-compose.yml` to match
+your environment or venue connectivity.
+
+11. Running tests locally (PowerShell or Bash)
+---------------------------------------------
+
+**Local Aeron dependency for non-Docker builds**
+
+If `cmake --preset debug` fails with `Aeron client not found`, point CMake at an Aeron install that contains `include/` and
+`lib/` (or `lib64/`) directories:
+
+- PowerShell (Windows):
+  ```powershell
+  $env:AERON_ROOT = "C:/path/to/aeron"   # where include/aeron/Aeron.h and lib/libaeron_client.lib live
+  cmake --preset debug
+  ```
+
+- Bash (Linux/macOS):
+  ```bash
+  export AERON_ROOT=/opt/aeron
+  cmake --preset debug
+  ```
+
+To build Aeron yourself on Windows with minimal options:
+
+```powershell
+git clone https://github.com/real-logic/aeron.git
+cmake -S aeron -B aeron-build -DAERON_TESTS=OFF -DAERON_SMOKE_TESTS=OFF -DCMAKE_INSTALL_PREFIX="C:/deps/aeron"
+cmake --build aeron-build --config Release --target install
+$env:AERON_ROOT = "C:/deps/aeron"  # reuse for this project
+```
+
+CMake also honors `aeron_DIR` or `CMAKE_PREFIX_PATH` if you prefer those variables over `AERON_ROOT`.
+
+**Unit tests (mocked Aeron client)**
+
+- On Windows PowerShell (requires CMake/Ninja and Aeron headers/libs on the
+  host path via `AERON_ROOT`, `aeron_DIR`, or system install):
+
+  ```powershell
+  cmake --preset debug
+  cmake --build --preset debug --target unit_tests
+  .\build\debug\unit_tests.exe
+  ```
+
+- On Bash/Linux:
+
+  ```bash
+  cmake --preset debug
+  cmake --build --preset debug --target unit_tests
+  ./build/debug/unit_tests
+  ```
+
+**Integration (Aeron flow) tests**
+
+Run the integration flow fully inside Docker using the single top-level
+compose file (no extra compose overlays required):
+
+```bash
+docker compose build --profile test
+docker compose run --rm --profile test integration-tests
+```
+
+The `integration-tests` service starts an embedded Aeron media driver and
+launches the recon daemon and publishers inside the container, then verifies
+the “Reconciler consumed” counters in the recon logs.
