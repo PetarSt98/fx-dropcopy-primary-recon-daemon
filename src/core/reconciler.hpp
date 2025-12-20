@@ -8,10 +8,12 @@
 #include "ingest/spsc_ring.hpp"
 #include "core/exec_event.hpp"
 #include "core/divergence.hpp"
+#include "core/sequence_tracker.hpp"
 
 namespace core {
 
 using DivergenceRing = ingest::SpscRing<Divergence, 1u << 16>;
+using SequenceGapRing = ingest::SpscRing<SequenceGapEvent, 1u << 16>;
 
 struct ReconCounters {
     std::uint64_t internal_events{0};
@@ -26,6 +28,14 @@ struct ReconCounters {
 
     std::uint64_t divergence_ring_drops{0};
     std::uint64_t store_overflow{0};
+
+    std::uint64_t primary_seq_gaps{0};
+    std::uint64_t primary_seq_duplicates{0};
+    std::uint64_t primary_seq_out_of_order{0};
+    std::uint64_t dropcopy_seq_gaps{0};
+    std::uint64_t dropcopy_seq_duplicates{0};
+    std::uint64_t dropcopy_seq_out_of_order{0};
+    std::uint64_t sequence_gap_ring_drops{0};
 };
 
 class Reconciler {
@@ -35,7 +45,8 @@ public:
                ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
                OrderStateStore& store,
                ReconCounters& counters,
-               DivergenceRing& divergence_ring) noexcept;
+               DivergenceRing& divergence_ring,
+               SequenceGapRing& seq_gap_ring) noexcept;
 
     void run();
     void process_event_for_test(const ExecEvent& ev) noexcept { process_event(ev); }
@@ -54,6 +65,10 @@ private:
     OrderStateStore& store_;
     ReconCounters& counters_;
     DivergenceRing& divergence_ring_;
+    SequenceGapRing& seq_gap_ring_;
+
+    SequenceTracker primary_seq_tracker_{};
+    SequenceTracker dropcopy_seq_tracker_{};
 };
 
 } // namespace core

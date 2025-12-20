@@ -66,6 +66,8 @@ core::WireExecEvent make_wire() {
     core::WireExecEvent wire{};
     wire.exec_type = 2;
     wire.ord_status = 2;
+    wire.seq_num = 1;
+    wire.session_id = 0;
     wire.price_micro = 1;
     wire.qty = 2;
     wire.cum_qty = 2;
