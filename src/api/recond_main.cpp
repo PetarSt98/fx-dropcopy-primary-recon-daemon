@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
 
     ingest::Ring primary_ring;
     ingest::Ring dropcopy_ring;
+    core::DivergenceRing divergence_ring;
 
     ingest::ThreadStats primary_stats;
     ingest::ThreadStats dropcopy_stats;
@@ -40,7 +41,7 @@ int main(int argc, char** argv) {
     aeron::Context context;
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring);
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
                                         core::Source::Primary, client, stop_flag);
@@ -70,8 +71,10 @@ int main(int argc, char** argv) {
               << " parse_failures: " << primary_stats.parse_failures << "\n";
     std::cout << "DropCopy produced: " << dropcopy_stats.produced << " drops: " << dropcopy_stats.drops
               << " parse_failures: " << dropcopy_stats.parse_failures << "\n";
-    std::cout << "Reconciler consumed primary: " << counters.consumed_primary
-              << " dropcopy: " << counters.consumed_dropcopy << "\n";
+    std::cout << "Reconciler processed internal: " << counters.internal_events
+              << " dropcopy: " << counters.dropcopy_events << "\n";
+    std::cout << "Divergences total: " << counters.divergence_total
+              << " ring_drops: " << counters.divergence_ring_drops << "\n";
 
     return 0;
 }

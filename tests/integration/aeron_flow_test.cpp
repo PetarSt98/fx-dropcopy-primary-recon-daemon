@@ -191,6 +191,7 @@ int main() {
         ingest::ThreadStats primary_stats;
         ingest::ThreadStats dropcopy_stats;
         core::ReconCounters counters;
+        core::DivergenceRing divergence_ring;
         std::atomic<bool> stop_flag{false};
         util::Arena arena(util::Arena::default_capacity_bytes);
         constexpr std::size_t order_capacity_hint = 1u << 12;
@@ -200,7 +201,7 @@ int main() {
         context.aeronDir(aeron_dir.string());
         auto client = aeron::Aeron::connect(context);
 
-        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters);
+        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring);
         ingest::AeronSubscriber primary_sub(primary_channel,
                                             primary_stream,
                                             *primary_ring,
@@ -236,7 +237,7 @@ int main() {
 
         const auto consumption_deadline = Clock::now() + std::chrono::seconds{10};
         while (Clock::now() < consumption_deadline) {
-            if (counters.consumed_primary > 0 && counters.consumed_dropcopy > 0) {
+            if (counters.internal_events > 0 && counters.dropcopy_events > 0) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{20});
@@ -247,19 +248,19 @@ int main() {
         dropcopy_thread.join();
         recon_thread.join();
 
-        const bool consumed_primary = counters.consumed_primary > 0;
-        const bool consumed_dropcopy = counters.consumed_dropcopy > 0;
+        const bool consumed_primary = counters.internal_events > 0;
+        const bool consumed_dropcopy = counters.dropcopy_events > 0;
 
         if (!consumed_primary || !consumed_dropcopy) {
-            std::cerr << "Expected consumption on both streams but saw primary=" << counters.consumed_primary
-                      << " dropcopy=" << counters.consumed_dropcopy << std::endl;
+            std::cerr << "Expected consumption on both streams but saw primary=" << counters.internal_events
+                      << " dropcopy=" << counters.dropcopy_events << std::endl;
             return 1;
         }
 
         media_driver.stop();
         std::filesystem::remove_all(aeron_dir);
-        std::cout << "Integration succeeded: primary=" << counters.consumed_primary
-                  << " dropcopy=" << counters.consumed_dropcopy << std::endl;
+        std::cout << "Integration succeeded: primary=" << counters.internal_events
+                  << " dropcopy=" << counters.dropcopy_events << std::endl;
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "Integration test threw exception: " << ex.what() << std::endl;
