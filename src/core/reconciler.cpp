@@ -3,32 +3,95 @@
 #include <chrono>
 #include <thread>
 
+#include "core/order_state.hpp"
+#include "core/order_lifecycle.hpp"
+
 namespace core {
 
 Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
                        ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
                        OrderStateStore& store,
-                       ReconCounters& counters) noexcept
-    : stop_flag_(stop_flag), primary_(primary), dropcopy_(dropcopy), store_(store), counters_(counters) {}
+                       ReconCounters& counters,
+                       DivergenceRing& divergence_ring) noexcept
+    : stop_flag_(stop_flag),
+      primary_(primary),
+      dropcopy_(dropcopy),
+      store_(store),
+      counters_(counters),
+      divergence_ring_(divergence_ring) {}
+
+void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
+    switch (type) {
+    case DivergenceType::MissingFill:
+        ++counters_.divergence_missing_fill;
+        break;
+    case DivergenceType::PhantomOrder:
+        ++counters_.divergence_phantom;
+        break;
+    case DivergenceType::StateMismatch:
+        ++counters_.divergence_state_mismatch;
+        break;
+    case DivergenceType::QuantityMismatch:
+        ++counters_.divergence_quantity_mismatch;
+        break;
+    case DivergenceType::TimingAnomaly:
+        ++counters_.divergence_timing_anomaly;
+        break;
+    }
+}
+
+void Reconciler::process_event(const ExecEvent& ev) noexcept {
+    OrderState* st = store_.upsert(ev);
+    if (!st) {
+        ++counters_.store_overflow;
+        return;
+    }
+
+    bool ok = false;
+    if (ev.source == Source::Primary) {
+        ++counters_.internal_events;
+        ok = apply_internal_exec(*st, ev);
+    } else {
+        ++counters_.dropcopy_events;
+        ok = apply_dropcopy_exec(*st, ev);
+    }
+
+    if (!ok) {
+        Divergence div{};
+        fill_divergence_snapshot(*st, DivergenceType::StateMismatch, div);
+        if (!divergence_ring_.try_push(div)) {
+            ++counters_.divergence_ring_drops;
+        } else {
+            ++counters_.divergence_total;
+            increment_divergence_counter(div.type);
+        }
+        return;
+    }
+
+    Divergence div{};
+    if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
+        if (!divergence_ring_.try_push(div)) {
+            ++counters_.divergence_ring_drops;
+            return;
+        }
+        ++counters_.divergence_total;
+        increment_divergence_counter(div.type);
+    }
+}
 
 void Reconciler::run() {
-    ExecEvent evt{};
+    ExecEvent primary_evt{};
+    ExecEvent dropcopy_evt{};
     std::uint32_t backoff = 0;
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
-        if (primary_.try_pop(evt)) {
-            ++counters_.consumed_primary;
-            if (!store_.upsert(evt)) {
-                ++counters_.store_overflow;
-            }
+        if (primary_.try_pop(primary_evt)) {
+            process_event(primary_evt);
             consumed = true;
         }
-        if (dropcopy_.try_pop(evt)) {
-            ++counters_.consumed_dropcopy;
-            if (!store_.upsert(evt)) {
-                ++counters_.store_overflow;
-            }
+        if (dropcopy_.try_pop(dropcopy_evt)) {
+            process_event(dropcopy_evt);
             consumed = true;
         }
         if (!consumed) {

@@ -183,6 +183,7 @@ add_executable(unit_tests
     tests/order_lifecycle_tests.cpp
     tests/divergence_tests.cpp
     tests/order_state_store_tests.cpp
+    tests/reconciler_logic_tests.cpp
     tests/test_main.hpp
     src/ingest/aeron_subscriber.cpp
     src/ingest/fix_parser.cpp
