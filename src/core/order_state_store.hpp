@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 #include "core/order_state.hpp"
@@ -35,7 +36,9 @@ public:
     std::size_t overflow_count() const noexcept { return overflow_count_; }
 
 private:
-    static constexpr OrderKey empty_key_ = 0; // make_order_key is assumed never to return 0.
+    // Sentinel key marking an empty bucket. make_order_key is allowed to produce 0,
+    // so we pick the maximal value to avoid collisions with real keys.
+    static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();
 
     static std::size_t next_power_of_two(std::size_t v);
 
