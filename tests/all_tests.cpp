@@ -10,6 +10,8 @@ namespace order_lifecycle_tests { void add_tests(std::vector<TestCase>& tests); 
 namespace divergence_tests { void add_tests(std::vector<TestCase>& tests); }
 namespace order_state_store_tests { void add_tests(std::vector<TestCase>& tests); }
 namespace reconciler_logic_tests { void add_tests(std::vector<TestCase>& tests); }
+namespace sequence_tracker_tests { void add_tests(std::vector<TestCase>& tests); }
+namespace reconciler_sequence_tests { void add_tests(std::vector<TestCase>& tests); }
 
 int main() {
     std::vector<TestCase> tests;
@@ -23,5 +25,7 @@ int main() {
     divergence_tests::add_tests(tests);
     order_state_store_tests::add_tests(tests);
     reconciler_logic_tests::add_tests(tests);
+    sequence_tracker_tests::add_tests(tests);
+    reconciler_sequence_tests::add_tests(tests);
     return run_tests(tests);
 }

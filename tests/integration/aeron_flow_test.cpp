@@ -100,6 +100,8 @@ core::WireExecEvent make_wire_exec(std::size_t seq) {
     core::WireExecEvent evt{};
     evt.exec_type = 2; // Fill
     evt.ord_status = 2; // Filled
+    evt.seq_num = static_cast<std::uint64_t>(seq);
+    evt.session_id = 0;
     evt.price_micro = 1000000 + static_cast<std::int64_t>(seq);
     evt.qty = 100 + static_cast<std::int64_t>(seq);
     evt.cum_qty = evt.qty;
@@ -192,6 +194,7 @@ int main() {
         ingest::ThreadStats dropcopy_stats;
         core::ReconCounters counters;
         core::DivergenceRing divergence_ring;
+        core::SequenceGapRing seq_gap_ring;
         std::atomic<bool> stop_flag{false};
         util::Arena arena(util::Arena::default_capacity_bytes);
         constexpr std::size_t order_capacity_hint = 1u << 12;
@@ -201,7 +204,7 @@ int main() {
         context.aeronDir(aeron_dir.string());
         auto client = aeron::Aeron::connect(context);
 
-        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring);
+        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
         ingest::AeronSubscriber primary_sub(primary_channel,
                                             primary_stream,
                                             *primary_ring,

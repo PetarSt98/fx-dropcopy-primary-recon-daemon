@@ -21,7 +21,9 @@ core::ExecEvent make_event(core::Source src,
                            const char* clord_id = "CID1",
                            const char* exec_id = "EXEC1") {
     core::ExecEvent ev{};
+    static std::uint64_t seq_seed = 1;
     ev.source = src;
+    ev.seq_num = seq_seed++;
     ev.ord_status = status;
     switch (status) {
     case core::OrdStatus::Filled:
@@ -48,6 +50,7 @@ struct Harness {
     std::unique_ptr<ExecRing> primary_ring;
     std::unique_ptr<ExecRing> dropcopy_ring;
     std::unique_ptr<core::DivergenceRing> divergence_ring;
+    std::unique_ptr<core::SequenceGapRing> seq_gap_ring;
     util::Arena arena{util::Arena::default_capacity_bytes};
     core::OrderStateStore store;
     core::ReconCounters counters{};
@@ -57,8 +60,15 @@ struct Harness {
         : primary_ring(std::make_unique<ExecRing>()),
           dropcopy_ring(std::make_unique<ExecRing>()),
           divergence_ring(std::make_unique<core::DivergenceRing>()),
+          seq_gap_ring(std::make_unique<core::SequenceGapRing>()),
           store(arena, capacity_hint),
-          reconciler(stop_flag, *primary_ring, *dropcopy_ring, store, counters, *divergence_ring) {}
+          reconciler(stop_flag,
+                     *primary_ring,
+                     *dropcopy_ring,
+                     store,
+                     counters,
+                     *divergence_ring,
+                     *seq_gap_ring) {}
 };
 
 bool test_matching_views_no_divergence() {

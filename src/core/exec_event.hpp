@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <array>
 #include <cstring>
+#include <type_traits>
 
 #include "core/wire_exec_event.hpp"
 
@@ -28,6 +29,8 @@ struct ExecEvent {
     Source source{};
     ExecType exec_type{ExecType::Unknown};
     OrdStatus ord_status{OrdStatus::Unknown};
+    std::uint64_t seq_num{0};     // session-level sequence number
+    std::uint16_t session_id{0};  // optional session/stream identifier
     int64_t price_micro{0}; // price in micro-units
     int64_t qty{0};
     int64_t cum_qty{0};
@@ -67,6 +70,8 @@ inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_t
     evt.source = src;
     evt.exec_type = static_cast<ExecType>(w.exec_type);
     evt.ord_status = static_cast<OrdStatus>(w.ord_status);
+    evt.seq_num = w.seq_num;
+    evt.session_id = w.session_id;
     evt.price_micro = w.price_micro;
     evt.qty = w.qty;
     evt.cum_qty = w.cum_qty;
@@ -91,5 +96,7 @@ inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_t
 
     return evt;
 }
+
+static_assert(std::is_trivially_copyable_v<ExecEvent>, "ExecEvent must remain trivially copyable");
 
 } // namespace core

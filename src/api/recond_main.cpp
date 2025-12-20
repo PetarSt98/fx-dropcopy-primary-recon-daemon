@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
     ingest::Ring primary_ring;
     ingest::Ring dropcopy_ring;
     core::DivergenceRing divergence_ring;
+    core::SequenceGapRing seq_gap_ring;
 
     ingest::ThreadStats primary_stats;
     ingest::ThreadStats dropcopy_stats;
@@ -41,7 +42,7 @@ int main(int argc, char** argv) {
     aeron::Context context;
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
                                         core::Source::Primary, client, stop_flag);

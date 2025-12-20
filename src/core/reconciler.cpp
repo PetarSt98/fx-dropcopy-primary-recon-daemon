@@ -13,13 +13,15 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
                        OrderStateStore& store,
                        ReconCounters& counters,
-                       DivergenceRing& divergence_ring) noexcept
+                       DivergenceRing& divergence_ring,
+                       SequenceGapRing& seq_gap_ring) noexcept
     : stop_flag_(stop_flag),
       primary_(primary),
       dropcopy_(dropcopy),
       store_(store),
       counters_(counters),
-      divergence_ring_(divergence_ring) {}
+      divergence_ring_(divergence_ring),
+      seq_gap_ring_(seq_gap_ring) {}
 
 void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
     switch (type) {
@@ -42,10 +44,52 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 }
 
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
+    SequenceGapEvent gap_ev{};
+    SequenceGapEvent* gap_ptr = &gap_ev;
+    const std::uint64_t now_ts = ev.ingest_tsc;
+
+    bool has_gap = false;
+    if (ev.source == Source::Primary) {
+        has_gap = track_sequence(primary_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_ts, gap_ptr);
+    } else if (ev.source == Source::DropCopy) {
+        has_gap = track_sequence(dropcopy_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_ts, gap_ptr);
+    }
+
+    if (has_gap) {
+        switch (gap_ev.source) {
+        case Source::Primary:
+            if (gap_ev.kind == GapKind::Gap) {
+                ++counters_.primary_seq_gaps;
+            } else if (gap_ev.kind == GapKind::Duplicate) {
+                ++counters_.primary_seq_duplicates;
+            } else {
+                ++counters_.primary_seq_out_of_order;
+            }
+            break;
+        case Source::DropCopy:
+            if (gap_ev.kind == GapKind::Gap) {
+                ++counters_.dropcopy_seq_gaps;
+            } else if (gap_ev.kind == GapKind::Duplicate) {
+                ++counters_.dropcopy_seq_duplicates;
+            } else {
+                ++counters_.dropcopy_seq_out_of_order;
+            }
+            break;
+        }
+
+        if (!seq_gap_ring_.try_push(gap_ev)) {
+            ++counters_.sequence_gap_ring_drops;
+        }
+    }
+
     OrderState* st = store_.upsert(ev);
     if (!st) {
         ++counters_.store_overflow;
         return;
+    }
+
+    if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
+        st->has_gap = true;
     }
 
     bool ok = false;

@@ -24,6 +24,8 @@ core::WireExecEvent make_wire_exec(std::size_t seq) {
     core::WireExecEvent evt{};
     evt.exec_type = 2; // Fill
     evt.ord_status = 2; // Filled
+    evt.seq_num = static_cast<std::uint64_t>(seq);
+    evt.session_id = 0;
     evt.price_micro = 1000000 + static_cast<std::int64_t>(seq);
     evt.qty = 100 + static_cast<std::int64_t>(seq);
     evt.cum_qty = evt.qty;

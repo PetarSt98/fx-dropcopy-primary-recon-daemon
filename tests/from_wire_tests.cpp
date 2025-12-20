@@ -12,6 +12,8 @@ bool test_from_wire_roundtrip() {
     core::WireExecEvent wire{};
     wire.exec_type = static_cast<std::uint8_t>(core::ExecType::Fill);
     wire.ord_status = static_cast<std::uint8_t>(core::OrdStatus::Filled);
+    wire.seq_num = 42;
+    wire.session_id = 7;
     wire.price_micro = 123456;
     wire.qty = 1000;
     wire.cum_qty = 2000;
@@ -31,6 +33,7 @@ bool test_from_wire_roundtrip() {
     if (evt.source != core::Source::Primary) return false;
     if (evt.exec_type != core::ExecType::Fill) return false;
     if (evt.ord_status != core::OrdStatus::Filled) return false;
+    if (evt.seq_num != wire.seq_num || evt.session_id != wire.session_id) return false;
     if (evt.price_micro != wire.price_micro || evt.qty != wire.qty || evt.cum_qty != wire.cum_qty) return false;
     if (evt.sending_time != wire.sending_time || evt.transact_time != wire.transact_time) return false;
     if (evt.ingest_tsc != 999) return false;

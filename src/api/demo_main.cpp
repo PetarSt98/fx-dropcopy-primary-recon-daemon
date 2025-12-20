@@ -45,6 +45,7 @@ void ingest_thread(std::atomic<bool>& stop_flag, Ring& ring, ThreadStats& stats,
             ++stats.parse_failures;
         } else {
             evt.source = src;
+            evt.seq_num = seq;
             if (!ring.try_push(evt)) {
                 ++stats.drops;
             } else {
@@ -63,6 +64,7 @@ int main() {
     Ring primary_ring;
     Ring dropcopy_ring;
     core::DivergenceRing divergence_ring;
+    core::SequenceGapRing seq_gap_ring;
 
     ThreadStats primary_stats;
     ThreadStats dropcopy_stats;
@@ -71,7 +73,7 @@ int main() {
     constexpr std::size_t order_capacity_hint = 1u << 14;
     core::OrderStateStore store(arena, order_capacity_hint);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
 
     std::thread primary([&] { ingest_thread(stop_flag, primary_ring, primary_stats, core::Source::Primary); });
     std::thread dropcopy([&] { ingest_thread(stop_flag, dropcopy_ring, dropcopy_stats, core::Source::DropCopy); });

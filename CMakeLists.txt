@@ -19,6 +19,7 @@ add_library(fx_core
     src/ingest/aeron_client_view.hpp
     src/core/exec_event.hpp
     src/core/wire_exec_event.hpp
+    src/core/sequence_tracker.hpp
     src/core/order_lifecycle.hpp
     src/core/divergence.hpp
     src/core/order_state.hpp
@@ -184,6 +185,8 @@ add_executable(unit_tests
     tests/divergence_tests.cpp
     tests/order_state_store_tests.cpp
     tests/reconciler_logic_tests.cpp
+    tests/sequence_tracker_tests.cpp
+    tests/reconciler_sequence_tests.cpp
     tests/test_main.hpp
     src/ingest/aeron_subscriber.cpp
     src/ingest/fix_parser.cpp

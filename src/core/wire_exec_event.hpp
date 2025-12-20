@@ -15,6 +15,8 @@ struct WireExecEvent {
 
     std::uint8_t exec_type{0};
     std::uint8_t ord_status{0};
+    std::uint64_t seq_num{0};
+    std::uint16_t session_id{0};
     std::int64_t price_micro{0};
     std::int64_t qty{0};
     std::int64_t cum_qty{0};
@@ -33,6 +35,6 @@ struct WireExecEvent {
 #pragma pack(pop)
 
 static_assert(std::is_trivially_copyable_v<WireExecEvent>, "WireExecEvent must be trivial");
-static_assert(sizeof(WireExecEvent) == 141, "WireExecEvent layout is expected to be packed and fixed-size");
+static_assert(sizeof(WireExecEvent) == 151, "WireExecEvent layout is expected to be packed and fixed-size");
 
 } // namespace core
