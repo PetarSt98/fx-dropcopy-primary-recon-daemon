@@ -1,14 +1,15 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
 
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
 
-namespace wire_exec_tests {
+namespace {
 
-bool test_from_wire_roundtrip() {
+TEST(WireExecTest, FromWireRoundtrip) {
     core::WireExecEvent wire{};
     wire.exec_type = static_cast<std::uint8_t>(core::ExecType::Fill);
     wire.ord_status = static_cast<std::uint8_t>(core::OrdStatus::Filled);
@@ -19,6 +20,7 @@ bool test_from_wire_roundtrip() {
     wire.cum_qty = 2000;
     wire.sending_time = 111;
     wire.transact_time = 222;
+
     const char exec_id[] = "EXECID";
     const char order_id[] = "ORDERID";
     const char clord_id[] = "CLORDID";
@@ -30,21 +32,27 @@ bool test_from_wire_roundtrip() {
     std::memcpy(wire.clord_id, clord_id, wire.clord_id_len);
 
     const auto evt = core::from_wire(wire, core::Source::Primary, 999);
-    if (evt.source != core::Source::Primary) return false;
-    if (evt.exec_type != core::ExecType::Fill) return false;
-    if (evt.ord_status != core::OrdStatus::Filled) return false;
-    if (evt.seq_num != wire.seq_num || evt.session_id != wire.session_id) return false;
-    if (evt.price_micro != wire.price_micro || evt.qty != wire.qty || evt.cum_qty != wire.cum_qty) return false;
-    if (evt.sending_time != wire.sending_time || evt.transact_time != wire.transact_time) return false;
-    if (evt.ingest_tsc != 999) return false;
-    if (evt.exec_id_len != wire.exec_id_len || std::memcmp(evt.exec_id, exec_id, evt.exec_id_len) != 0) return false;
-    if (evt.order_id_len != wire.order_id_len || std::memcmp(evt.order_id, order_id, evt.order_id_len) != 0) return false;
-    if (evt.clord_id_len != wire.clord_id_len || std::memcmp(evt.clord_id, clord_id, evt.clord_id_len) != 0) return false;
-    return true;
+
+    EXPECT_EQ(evt.source, core::Source::Primary);
+    EXPECT_EQ(evt.exec_type, core::ExecType::Fill);
+    EXPECT_EQ(evt.ord_status, core::OrdStatus::Filled);
+    EXPECT_EQ(evt.seq_num, wire.seq_num);
+    EXPECT_EQ(evt.session_id, wire.session_id);
+    EXPECT_EQ(evt.price_micro, wire.price_micro);
+    EXPECT_EQ(evt.qty, wire.qty);
+    EXPECT_EQ(evt.cum_qty, wire.cum_qty);
+    EXPECT_EQ(evt.sending_time, wire.sending_time);
+    EXPECT_EQ(evt.transact_time, wire.transact_time);
+    EXPECT_EQ(evt.ingest_tsc, 999);
+
+    ASSERT_EQ(evt.exec_id_len, wire.exec_id_len);
+    EXPECT_EQ(std::string_view(evt.exec_id, evt.exec_id_len), std::string_view(exec_id));
+
+    ASSERT_EQ(evt.order_id_len, wire.order_id_len);
+    EXPECT_EQ(std::string_view(evt.order_id, evt.order_id_len), std::string_view(order_id));
+
+    ASSERT_EQ(evt.clord_id_len, wire.clord_id_len);
+    EXPECT_EQ(std::string_view(evt.clord_id, evt.clord_id_len), std::string_view(clord_id));
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"from_wire_roundtrip", test_from_wire_roundtrip});
-}
-
-} // namespace wire_exec_tests
+} // namespace

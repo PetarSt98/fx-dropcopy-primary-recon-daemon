@@ -12,6 +12,18 @@ else()
 endif()
 
 include(GNUInstallDirs)
+include(CTest)
+include(FetchContent)
+include(GoogleTest)
+enable_testing()
+
+set(BUILD_GMOCK ON CACHE BOOL "" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+)
+FetchContent_MakeAvailable(googletest)
 
 add_library(fx_core
     src/ingest/spsc_ring.hpp
@@ -173,8 +185,7 @@ add_executable(fx_aeron_publisher
 )
 target_link_libraries(fx_aeron_publisher PRIVATE fx_core aeron::aeron_client)
 
-add_executable(unit_tests
-    tests/all_tests.cpp
+add_executable(unit_tests_gtest
     tests/ring_tests.cpp
     tests/fix_parser_tests.cpp
     tests/from_wire_tests.cpp
@@ -187,24 +198,26 @@ add_executable(unit_tests
     tests/reconciler_logic_tests.cpp
     tests/sequence_tracker_tests.cpp
     tests/reconciler_sequence_tests.cpp
-    tests/test_main.hpp
-    src/ingest/aeron_subscriber.cpp
-    src/ingest/fix_parser.cpp
-    src/core/reconciler.cpp
-    src/core/order_state_store.cpp
 )
-target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(unit_tests PRIVATE fx_core aeron::aeron_client)
+target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
+target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(unit_tests_gtest PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+
+gtest_discover_tests(unit_tests_gtest
+  TEST_PREFIX unit_
+  DISCOVERY_MODE PRE_TEST
+)
 
 add_executable(integration_aeron_flow
     tests/integration/aeron_flow_test.cpp
     src/ingest/aeron_subscriber.cpp
 )
-target_link_libraries(integration_aeron_flow PRIVATE fx_core aeron::aeron_client)
+target_link_libraries(integration_aeron_flow PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+
+gtest_discover_tests(integration_aeron_flow
+  TEST_PREFIX integration_aeron_flow_
+  DISCOVERY_MODE PRE_TEST
+)
 
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
-
-enable_testing()
-add_test(NAME unit_tests COMMAND unit_tests)
-add_test(NAME integration_aeron_flow COMMAND integration_aeron_flow)

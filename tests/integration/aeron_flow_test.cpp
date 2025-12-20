@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -15,6 +16,7 @@
 
 #include <Aeron.h>
 #include <concurrent/AtomicBuffer.h>
+#include <gtest/gtest.h>
 
 #include "core/order_state_store.hpp"
 #include "core/reconciler.hpp"
@@ -166,107 +168,96 @@ bool publish_fragments(aeron::Aeron& client,
 
 } // namespace
 
-int main() {
-    try {
-        const std::string primary_channel = "aeron:udp?endpoint=localhost:20121";
-        const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20122";
-        constexpr std::int32_t primary_stream = 1001;
-        constexpr std::int32_t dropcopy_stream = 1002;
+TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
+    const std::string primary_channel = "aeron:udp?endpoint=localhost:20121";
+    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20122";
+    constexpr std::int32_t primary_stream = 1001;
+    constexpr std::int32_t dropcopy_stream = 1002;
 
-        const auto aeron_dir = make_unique_aeron_dir();
-        setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
+    const auto aeron_dir = make_unique_aeron_dir();
+    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
 
-        ProcessGuard media_driver(launch_media_driver(aeron_dir));
-        if (!media_driver.valid()) {
-            std::cerr << "Failed to start Aeron media driver" << std::endl;
-            return 1;
-        }
+    ProcessGuard media_driver(launch_media_driver(aeron_dir));
+    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
 
-        const auto cnc_path = aeron_dir / "cnc.dat";
-        if (!wait_for_file(cnc_path, std::chrono::seconds{5})) {
-            std::cerr << "Aeron media driver did not create " << cnc_path << std::endl;
-            return 1;
-        }
+    const auto cnc_path = aeron_dir / "cnc.dat";
+    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5})) << "Aeron media driver did not create " << cnc_path;
 
-        auto primary_ring = std::make_unique<ingest::Ring>();
-        auto dropcopy_ring = std::make_unique<ingest::Ring>();
-        ingest::ThreadStats primary_stats;
-        ingest::ThreadStats dropcopy_stats;
-        core::ReconCounters counters;
-        core::DivergenceRing divergence_ring;
-        core::SequenceGapRing seq_gap_ring;
-        std::atomic<bool> stop_flag{false};
-        util::Arena arena(util::Arena::default_capacity_bytes);
-        constexpr std::size_t order_capacity_hint = 1u << 12;
-        core::OrderStateStore store(arena, order_capacity_hint);
+    auto primary_ring = std::make_unique<ingest::Ring>();
+    auto dropcopy_ring = std::make_unique<ingest::Ring>();
+    ingest::ThreadStats primary_stats;
+    ingest::ThreadStats dropcopy_stats;
+    core::ReconCounters counters{};
+    core::DivergenceRing divergence_ring;
+    core::SequenceGapRing seq_gap_ring;
+    std::atomic<bool> stop_flag{false};
+    util::Arena arena(util::Arena::default_capacity_bytes);
+    constexpr std::size_t order_capacity_hint = 1u << 12;
+    core::OrderStateStore store(arena, order_capacity_hint);
 
-        aeron::Context context;
-        context.aeronDir(aeron_dir.string());
-        auto client = aeron::Aeron::connect(context);
+    aeron::Context context;
+    context.aeronDir(aeron_dir.string());
+    auto client = aeron::Aeron::connect(context);
 
-        core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
-        ingest::AeronSubscriber primary_sub(primary_channel,
-                                            primary_stream,
-                                            *primary_ring,
-                                            primary_stats,
-                                            core::Source::Primary,
-                                            client,
-                                            stop_flag);
-        ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                             dropcopy_stream,
-                                             *dropcopy_ring,
-                                             dropcopy_stats,
-                                             core::Source::DropCopy,
-                                             client,
-                                             stop_flag);
+    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    ingest::AeronSubscriber primary_sub(primary_channel,
+                                        primary_stream,
+                                        *primary_ring,
+                                        primary_stats,
+                                        core::Source::Primary,
+                                        client,
+                                        stop_flag);
+    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
+                                         dropcopy_stream,
+                                         *dropcopy_ring,
+                                         dropcopy_stats,
+                                         core::Source::DropCopy,
+                                         client,
+                                         stop_flag);
 
-        std::thread primary_thread([&] { primary_sub.run(); });
-        std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-        std::thread recon_thread([&] { recon.run(); });
+    std::thread primary_thread([&] { primary_sub.run(); });
+    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
+    std::thread recon_thread([&] { recon.run(); });
 
-        aeron::Context pub_context;
-        pub_context.aeronDir(aeron_dir.string());
-        auto pub_client = aeron::Aeron::connect(pub_context);
-
-        const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-        if (!publish_fragments(*pub_client, primary_channel, primary_stream, 8, publish_deadline)
-            || !publish_fragments(*pub_client, dropcopy_channel, dropcopy_stream, 8, publish_deadline)) {
-            stop_flag.store(true, std::memory_order_release);
-            primary_thread.join();
-            dropcopy_thread.join();
-            recon_thread.join();
-            return 1;
-        }
-
-        const auto consumption_deadline = Clock::now() + std::chrono::seconds{10};
-        while (Clock::now() < consumption_deadline) {
-            if (counters.internal_events > 0 && counters.dropcopy_events > 0) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds{20});
-        }
-
+    bool cleaned = false;
+    auto cleanup = [&] {
+        if (cleaned) return;
         stop_flag.store(true, std::memory_order_release);
-        primary_thread.join();
-        dropcopy_thread.join();
-        recon_thread.join();
-
-        const bool consumed_primary = counters.internal_events > 0;
-        const bool consumed_dropcopy = counters.dropcopy_events > 0;
-
-        if (!consumed_primary || !consumed_dropcopy) {
-            std::cerr << "Expected consumption on both streams but saw primary=" << counters.internal_events
-                      << " dropcopy=" << counters.dropcopy_events << std::endl;
-            return 1;
-        }
-
+        if (primary_thread.joinable()) primary_thread.join();
+        if (dropcopy_thread.joinable()) dropcopy_thread.join();
+        if (recon_thread.joinable()) recon_thread.join();
         media_driver.stop();
         std::filesystem::remove_all(aeron_dir);
-        std::cout << "Integration succeeded: primary=" << counters.internal_events
-                  << " dropcopy=" << counters.dropcopy_events << std::endl;
-        return 0;
-    } catch (const std::exception& ex) {
-        std::cerr << "Integration test threw exception: " << ex.what() << std::endl;
-        return 1;
+        cleaned = true;
+    };
+    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(nullptr, [&](void*) { cleanup(); });
+
+    aeron::Context pub_context;
+    pub_context.aeronDir(aeron_dir.string());
+    auto pub_client = aeron::Aeron::connect(pub_context);
+
+    const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
+    if (!publish_fragments(*pub_client, primary_channel, primary_stream, 8, publish_deadline)
+        || !publish_fragments(*pub_client, dropcopy_channel, dropcopy_stream, 8, publish_deadline)) {
+        FAIL() << "Failed to publish fragments to one or both channels";
     }
+
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{10};
+    while (Clock::now() < consumption_deadline) {
+        if (counters.internal_events > 0 && counters.dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    }
+
+    cleanup();
+
+    const bool consumed_primary = counters.internal_events > 0;
+    const bool consumed_dropcopy = counters.dropcopy_events > 0;
+
+    SCOPED_TRACE("primary=" + std::to_string(counters.internal_events) + " dropcopy=" +
+                 std::to_string(counters.dropcopy_events));
+
+    EXPECT_TRUE(consumed_primary);
+    EXPECT_TRUE(consumed_dropcopy);
 }

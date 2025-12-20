@@ -1,23 +1,26 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/order_state_store.hpp"
 
-namespace order_state_store_tests {
-
 namespace {
+
 core::ExecEvent make_event(const std::string& cid) {
     core::ExecEvent evt{};
     evt.set_clord_id(cid.data(), cid.size());
     return evt;
 }
-} // namespace
 
-bool test_basic_insert_find() {
-    util::Arena arena(1 << 20);
-    core::OrderStateStore store(arena, 128);
+class OrderStateStoreTest : public ::testing::Test {
+protected:
+    util::Arena arena_{1 << 20};
+};
+
+TEST_F(OrderStateStoreTest, BasicInsertFind) {
+    core::OrderStateStore store(arena_, 128);
 
     std::vector<core::ExecEvent> events;
     for (int i = 0; i < 10; ++i) {
@@ -26,24 +29,20 @@ bool test_basic_insert_find() {
 
     for (const auto& ev : events) {
         core::OrderState* first = store.upsert(ev);
-        if (!first) {
-            return false;
-        }
+        ASSERT_NE(first, nullptr) << "Failed to insert event with cid " << std::string_view(ev.clord_id, ev.clord_id_len);
+
         core::OrderState* second = store.upsert(ev);
-        if (first != second) {
-            return false;
-        }
-        if (store.find(core::make_order_key(ev)) != first) {
-            return false;
-        }
+        EXPECT_EQ(first, second) << "Expected upsert to return existing state for cid "
+                                 << std::string_view(ev.clord_id, ev.clord_id_len);
+
+        EXPECT_EQ(store.find(core::make_order_key(ev)), first);
     }
 
-    return store.size() == events.size();
+    EXPECT_EQ(store.size(), events.size());
 }
 
-bool test_collision_handling() {
-    util::Arena arena(1 << 20);
-    core::OrderStateStore store(arena, 4);
+TEST_F(OrderStateStoreTest, CollisionHandling) {
+    core::OrderStateStore store(arena_, 4);
     const std::size_t mask = store.bucket_count() - 1;
 
     std::vector<bool> bucket_seen(store.bucket_count(), false);
@@ -66,40 +65,37 @@ bool test_collision_handling() {
         }
     }
 
-    if (!found) {
-        return false;
-    }
+    ASSERT_TRUE(found) << "Unable to synthesize two distinct keys mapping to same bucket";
 
     auto* s1 = store.upsert(first);
     auto* s2 = store.upsert(second);
-    if (!s1 || !s2 || s1 == s2) {
-        return false;
-    }
-    return store.find(core::make_order_key(first)) == s1 &&
-           store.find(core::make_order_key(second)) == s2;
+    ASSERT_NE(s1, nullptr);
+    ASSERT_NE(s2, nullptr);
+    EXPECT_NE(s1, s2);
+
+    EXPECT_EQ(store.find(core::make_order_key(first)), s1);
+    EXPECT_EQ(store.find(core::make_order_key(second)), s2);
 }
 
-bool test_epoch_reset() {
-    util::Arena arena(1 << 20);
-    core::OrderStateStore store(arena, 8);
+TEST_F(OrderStateStoreTest, EpochReset) {
+    core::OrderStateStore store(arena_, 8);
     const auto ev = make_event("RESET1");
     const auto key = core::make_order_key(ev);
 
     core::OrderState* s1 = store.upsert(ev);
-    if (!s1) {
-        return false;
-    }
+    ASSERT_NE(s1, nullptr);
     store.reset_epoch();
-    if (store.find(key) != nullptr) {
-        return false;
-    }
+
+    EXPECT_EQ(store.find(key), nullptr);
+
     core::OrderState* s2 = store.upsert(ev);
-    return s2 && s2->key == key;
+    ASSERT_NE(s2, nullptr);
+    EXPECT_EQ(s2->key, key);
 }
 
-bool test_overflow_path() {
-    util::Arena arena(1 << 12);
-    core::OrderStateStore store(arena, 2);
+TEST_F(OrderStateStoreTest, OverflowPath) {
+    util::Arena small_arena(1 << 12);
+    core::OrderStateStore store(small_arena, 2);
 
     std::size_t failed_inserts = 0;
     for (int i = 0; i < 16; ++i) {
@@ -109,14 +105,8 @@ bool test_overflow_path() {
         }
     }
 
-    return failed_inserts > 0 && store.overflow_count() >= failed_inserts;
+    EXPECT_GT(failed_inserts, 0u);
+    EXPECT_GE(store.overflow_count(), failed_inserts);
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"order_state_store_basic_insert_find", test_basic_insert_find});
-    tests.push_back({"order_state_store_collision_handling", test_collision_handling});
-    tests.push_back({"order_state_store_epoch_reset", test_epoch_reset});
-    tests.push_back({"order_state_store_overflow_path", test_overflow_path});
-}
-
-} // namespace order_state_store_tests
+} // namespace

@@ -1,63 +1,72 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
 
 #include "core/sequence_tracker.hpp"
 
-namespace sequence_tracker_tests {
+namespace {
 
-bool test_init_tracker() {
+TEST(SequenceTrackerTest, InitTracker) {
     core::SequenceTracker trk{};
     const bool ok = core::init_sequence_tracker(trk, 10);
-    return ok && trk.initialized && trk.expected_seq == 11 && trk.last_seen_seq == 10 && !trk.gap_open;
+    ASSERT_TRUE(ok);
+    EXPECT_TRUE(trk.initialized);
+    EXPECT_EQ(trk.expected_seq, 11);
+    EXPECT_EQ(trk.last_seen_seq, 10);
+    EXPECT_FALSE(trk.gap_open);
 }
 
-bool test_in_order_sequence() {
+TEST(SequenceTrackerTest, InOrderSequence) {
     core::SequenceTracker trk{};
-    core::init_sequence_tracker(trk, 1);
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
     core::SequenceGapEvent evt{};
-    if (core::track_sequence(trk, core::Source::Primary, 0, 2, 0, &evt)) return false;
-    if (core::track_sequence(trk, core::Source::Primary, 0, 3, 0, &evt)) return false;
-    if (core::track_sequence(trk, core::Source::Primary, 0, 4, 0, &evt)) return false;
-    return trk.expected_seq == 5 && trk.last_seen_seq == 4 && !trk.gap_open;
+
+    EXPECT_FALSE(core::track_sequence(trk, core::Source::Primary, 0, 2, 0, &evt));
+    EXPECT_FALSE(core::track_sequence(trk, core::Source::Primary, 0, 3, 0, &evt));
+    EXPECT_FALSE(core::track_sequence(trk, core::Source::Primary, 0, 4, 0, &evt));
+
+    EXPECT_EQ(trk.expected_seq, 5);
+    EXPECT_EQ(trk.last_seen_seq, 4);
+    EXPECT_FALSE(trk.gap_open);
 }
 
-bool test_forward_gap_detected() {
+TEST(SequenceTrackerTest, ForwardGapDetected) {
     core::SequenceTracker trk{};
     core::SequenceGapEvent evt{};
-    core::init_sequence_tracker(trk, 1);
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
     const bool has_gap = core::track_sequence(trk, core::Source::Primary, 0, 4, 123, &evt);
-    return has_gap &&
-           trk.gap_open &&
-           trk.gap_start_seq == 2 &&
-           evt.kind == core::GapKind::Gap &&
-           evt.expected_seq == 2 &&
-           evt.seen_seq == 4 &&
-           evt.detect_ts == 123;
+
+    EXPECT_TRUE(has_gap);
+    EXPECT_TRUE(trk.gap_open);
+    EXPECT_EQ(trk.gap_start_seq, 2);
+    EXPECT_EQ(evt.kind, core::GapKind::Gap);
+    EXPECT_EQ(evt.expected_seq, 2);
+    EXPECT_EQ(evt.seen_seq, 4);
+    EXPECT_EQ(evt.detect_ts, 123);
 }
 
-bool test_duplicate_detected() {
+TEST(SequenceTrackerTest, DuplicateDetected) {
     core::SequenceTracker trk{};
     core::SequenceGapEvent evt{};
-    core::init_sequence_tracker(trk, 1);
-    core::track_sequence(trk, core::Source::Primary, 0, 2, 0, &evt);
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    EXPECT_FALSE(core::track_sequence(trk, core::Source::Primary, 0, 2, 0, &evt));
     const bool dup = core::track_sequence(trk, core::Source::Primary, 0, 2, 55, &evt);
-    return dup && evt.kind == core::GapKind::Duplicate && evt.seen_seq == 2 && evt.expected_seq == 3;
+
+    EXPECT_TRUE(dup);
+    EXPECT_EQ(evt.kind, core::GapKind::Duplicate);
+    EXPECT_EQ(evt.seen_seq, 2);
+    EXPECT_EQ(evt.expected_seq, 3);
 }
 
-bool test_out_of_order_detected() {
+TEST(SequenceTrackerTest, OutOfOrderDetected) {
     core::SequenceTracker trk{};
     core::SequenceGapEvent evt{};
-    core::init_sequence_tracker(trk, 1);
-    core::track_sequence(trk, core::Source::Primary, 0, 3, 0, &evt); // opens a gap at 2
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 3, 0, &evt));
     const bool out_of_order = core::track_sequence(trk, core::Source::Primary, 0, 2, 77, &evt);
-    return out_of_order && evt.kind == core::GapKind::OutOfOrder && evt.expected_seq == 4 && evt.seen_seq == 2;
+
+    EXPECT_TRUE(out_of_order);
+    EXPECT_EQ(evt.kind, core::GapKind::OutOfOrder);
+    EXPECT_EQ(evt.expected_seq, 4);
+    EXPECT_EQ(evt.seen_seq, 2);
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"sequence_tracker_init", test_init_tracker});
-    tests.push_back({"sequence_tracker_in_order", test_in_order_sequence});
-    tests.push_back({"sequence_tracker_forward_gap", test_forward_gap_detected});
-    tests.push_back({"sequence_tracker_duplicate", test_duplicate_detected});
-    tests.push_back({"sequence_tracker_out_of_order", test_out_of_order_detected});
-}
-
-} // namespace sequence_tracker_tests
+} // namespace

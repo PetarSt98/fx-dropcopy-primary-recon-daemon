@@ -1,10 +1,10 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
 
 #include "core/divergence.hpp"
 
-namespace divergence_tests {
+namespace {
 
-bool test_phantom_order_detection() {
+TEST(DivergenceTest, PhantomOrderDetection) {
     core::OrderState state{};
     state.key = 1;
     state.seen_dropcopy = true;
@@ -12,11 +12,12 @@ bool test_phantom_order_detection() {
     state.last_dropcopy_ts = 100;
 
     core::Divergence div{};
-    if (!core::classify_divergence(state, div)) return false;
-    return div.type == core::DivergenceType::PhantomOrder && div.key == state.key;
+    ASSERT_TRUE(core::classify_divergence(state, div));
+    EXPECT_EQ(div.type, core::DivergenceType::PhantomOrder);
+    EXPECT_EQ(div.key, state.key);
 }
 
-bool test_missing_fill_detection() {
+TEST(DivergenceTest, MissingFillDetection) {
     core::OrderState state{};
     state.key = 2;
     state.seen_internal = true;
@@ -31,13 +32,13 @@ bool test_missing_fill_detection() {
     state.last_dropcopy_ts = 150;
 
     core::Divergence div{};
-    if (!core::classify_divergence(state, div)) return false;
-    return div.type == core::DivergenceType::MissingFill &&
-           div.internal_status == core::OrdStatus::Working &&
-           div.dropcopy_status == core::OrdStatus::Filled;
+    ASSERT_TRUE(core::classify_divergence(state, div));
+    EXPECT_EQ(div.type, core::DivergenceType::MissingFill);
+    EXPECT_EQ(div.internal_status, core::OrdStatus::Working);
+    EXPECT_EQ(div.dropcopy_status, core::OrdStatus::Filled);
 }
 
-bool test_state_mismatch_detection() {
+TEST(DivergenceTest, StateMismatchDetection) {
     core::OrderState state{};
     state.key = 3;
     state.seen_internal = true;
@@ -48,13 +49,13 @@ bool test_state_mismatch_detection() {
     state.dropcopy_cum_qty = 15;
 
     core::Divergence div{};
-    if (!core::classify_divergence(state, div)) return false;
-    return div.type == core::DivergenceType::StateMismatch &&
-           div.internal_status == core::OrdStatus::PartiallyFilled &&
-           div.dropcopy_status == core::OrdStatus::Filled;
+    ASSERT_TRUE(core::classify_divergence(state, div));
+    EXPECT_EQ(div.type, core::DivergenceType::StateMismatch);
+    EXPECT_EQ(div.internal_status, core::OrdStatus::PartiallyFilled);
+    EXPECT_EQ(div.dropcopy_status, core::OrdStatus::Filled);
 }
 
-bool test_quantity_mismatch_detection() {
+TEST(DivergenceTest, QuantityMismatchDetection) {
     core::OrderState state{};
     state.key = 4;
     state.seen_internal = true;
@@ -67,13 +68,13 @@ bool test_quantity_mismatch_detection() {
     state.dropcopy_avg_px = 100;
 
     core::Divergence div{};
-    if (!core::classify_divergence(state, div, 5)) return false;
-    return div.type == core::DivergenceType::QuantityMismatch &&
-           div.dropcopy_cum_qty == 20 &&
-           div.internal_cum_qty == 10;
+    ASSERT_TRUE(core::classify_divergence(state, div, 5));
+    EXPECT_EQ(div.type, core::DivergenceType::QuantityMismatch);
+    EXPECT_EQ(div.dropcopy_cum_qty, 20);
+    EXPECT_EQ(div.internal_cum_qty, 10);
 }
 
-bool test_timing_anomaly_detection() {
+TEST(DivergenceTest, TimingAnomalyDetection) {
     core::OrderState state{};
     state.key = 5;
     state.seen_internal = true;
@@ -86,19 +87,10 @@ bool test_timing_anomaly_detection() {
     state.last_internal_ts = 200;
 
     core::Divergence div{};
-    if (!core::classify_divergence(state, div, 0, 0, 50)) return false;
-    return div.type == core::DivergenceType::TimingAnomaly &&
-           div.dropcopy_ts == state.last_dropcopy_ts &&
-           div.internal_ts == state.last_internal_ts;
+    ASSERT_TRUE(core::classify_divergence(state, div, 0, 0, 50));
+    EXPECT_EQ(div.type, core::DivergenceType::TimingAnomaly);
+    EXPECT_EQ(div.dropcopy_ts, state.last_dropcopy_ts);
+    EXPECT_EQ(div.internal_ts, state.last_internal_ts);
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"divergence_phantom_order_detection", test_phantom_order_detection});
-    tests.push_back({"divergence_missing_fill_detection", test_missing_fill_detection});
-    tests.push_back({"divergence_state_mismatch_detection", test_state_mismatch_detection});
-    tests.push_back({"divergence_quantity_mismatch_detection", test_quantity_mismatch_detection});
-    tests.push_back({"divergence_timing_anomaly_detection", test_timing_anomaly_detection});
-}
-
-} // namespace divergence_tests
-
+} // namespace
