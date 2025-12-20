@@ -1,6 +1,7 @@
 #include "test_main.hpp"
 
 #include <cstring>
+#include <memory>
 
 #include "core/reconciler.hpp"
 #include "core/divergence.hpp"
@@ -44,17 +45,20 @@ core::ExecEvent make_event(core::Source src,
 
 struct Harness {
     std::atomic<bool> stop_flag{false};
-    ExecRing primary_ring;
-    ExecRing dropcopy_ring;
-    core::DivergenceRing divergence_ring;
+    std::unique_ptr<ExecRing> primary_ring;
+    std::unique_ptr<ExecRing> dropcopy_ring;
+    std::unique_ptr<core::DivergenceRing> divergence_ring;
     util::Arena arena{util::Arena::default_capacity_bytes};
     core::OrderStateStore store;
     core::ReconCounters counters{};
     core::Reconciler reconciler;
 
     explicit Harness(std::size_t capacity_hint = 128u)
-        : store(arena, capacity_hint),
-          reconciler(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring) {}
+        : primary_ring(std::make_unique<ExecRing>()),
+          dropcopy_ring(std::make_unique<ExecRing>()),
+          divergence_ring(std::make_unique<core::DivergenceRing>()),
+          store(arena, capacity_hint),
+          reconciler(stop_flag, *primary_ring, *dropcopy_ring, store, counters, *divergence_ring) {}
 };
 
 bool test_matching_views_no_divergence() {
@@ -66,7 +70,7 @@ bool test_matching_views_no_divergence() {
     h.reconciler.process_event_for_test(dropcopy);
 
     core::Divergence div{};
-    if (h.divergence_ring.try_pop(div)) return false;
+    if (h.divergence_ring->try_pop(div)) return false;
     return h.counters.divergence_total == 0 && h.counters.internal_events == 1 && h.counters.dropcopy_events == 1 &&
            h.counters.divergence_ring_drops == 0;
 }
@@ -80,7 +84,7 @@ bool test_missing_fill_emitted() {
     h.reconciler.process_event_for_test(dropcopy);
 
     core::Divergence div{};
-    if (!h.divergence_ring.try_pop(div)) return false;
+    if (!h.divergence_ring->try_pop(div)) return false;
     if (div.type != core::DivergenceType::MissingFill) return false;
     return h.counters.divergence_total == 1 &&
            h.counters.divergence_missing_fill == 1 &&
@@ -93,7 +97,7 @@ bool test_phantom_order_emitted() {
     h.reconciler.process_event_for_test(dropcopy);
 
     core::Divergence div{};
-    if (!h.divergence_ring.try_pop(div)) return false;
+    if (!h.divergence_ring->try_pop(div)) return false;
     return div.type == core::DivergenceType::PhantomOrder &&
            h.counters.divergence_total == 1 &&
            h.counters.divergence_phantom == 1;
@@ -108,7 +112,7 @@ bool test_state_and_quantity_mismatches() {
     h.reconciler.process_event_for_test(dropcopy_state);
 
     core::Divergence first{};
-    if (!h.divergence_ring.try_pop(first)) return false;
+    if (!h.divergence_ring->try_pop(first)) return false;
     if (first.type != core::DivergenceType::StateMismatch) return false;
     if (h.counters.divergence_state_mismatch != 1) return false;
 
@@ -120,7 +124,7 @@ bool test_state_and_quantity_mismatches() {
     h.reconciler.process_event_for_test(dropcopy_qty);
 
     core::Divergence second{};
-    if (!h.divergence_ring.try_pop(second)) return false;
+    if (!h.divergence_ring->try_pop(second)) return false;
     if (second.type != core::DivergenceType::QuantityMismatch) return false;
     return h.counters.divergence_quantity_mismatch == 1 &&
            h.counters.divergence_total == 2;
@@ -134,24 +138,24 @@ bool test_integration_style_ring_draining() {
     auto d1 = make_event(core::Source::DropCopy, core::OrdStatus::PartiallyFilled, 50, 100, 13, "CID5", "D1");
     auto d2 = make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 100, 14, "CID5", "D2");
 
-    h.primary_ring.try_push(p1);
-    h.primary_ring.try_push(p2);
-    h.primary_ring.try_push(p3);
-    h.dropcopy_ring.try_push(d1);
-    h.dropcopy_ring.try_push(d2);
+    h.primary_ring->try_push(p1);
+    h.primary_ring->try_push(p2);
+    h.primary_ring->try_push(p3);
+    h.dropcopy_ring->try_push(d1);
+    h.dropcopy_ring->try_push(d2);
 
     core::ExecEvent ev{};
     core::ExecEvent dc{};
     while (true) {
-        const bool cp = h.primary_ring.try_pop(ev);
-        const bool cd = h.dropcopy_ring.try_pop(dc);
+        const bool cp = h.primary_ring->try_pop(ev);
+        const bool cd = h.dropcopy_ring->try_pop(dc);
         if (!cp && !cd) break;
         if (cp) h.reconciler.process_event_for_test(ev);
         if (cd) h.reconciler.process_event_for_test(dc);
     }
 
     core::Divergence div{};
-    const bool has_divergence = h.divergence_ring.try_pop(div);
+    const bool has_divergence = h.divergence_ring->try_pop(div);
     return has_divergence &&
            div.type == core::DivergenceType::StateMismatch &&
            h.counters.internal_events == 3 &&
