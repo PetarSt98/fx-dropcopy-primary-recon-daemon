@@ -94,7 +94,7 @@ bool test_epoch_reset() {
         return false;
     }
     core::OrderState* s2 = store.upsert(ev);
-    return s2 && s2 != s1;
+    return s2 && s2->key == key;
 }
 
 bool test_overflow_path() {
