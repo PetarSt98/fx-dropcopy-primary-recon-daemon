@@ -27,6 +27,8 @@ bool test_create_order_state_initialization() {
     bool ok = state->key == expected_key;
     ok = ok && state->internal_cum_qty == 0 && state->internal_avg_px == 0;
     ok = ok && state->dropcopy_cum_qty == 0 && state->dropcopy_avg_px == 0;
+    ok = ok && state->internal_status == core::OrdStatus::Unknown;
+    ok = ok && state->dropcopy_status == core::OrdStatus::Unknown;
     ok = ok && state->last_internal_exec_id_len == 0 && state->last_dropcopy_exec_id_len == 0;
     ok = ok && !state->seen_internal && !state->seen_dropcopy;
     ok = ok && !state->has_divergence && !state->has_gap;

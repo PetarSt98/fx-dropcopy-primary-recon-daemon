@@ -42,6 +42,8 @@ inline core::ExecType map_exec_type(char c) noexcept {
 inline core::OrdStatus map_ord_status(char c) noexcept {
     switch (c) {
     case '0': return core::OrdStatus::New;
+    case 'A': return core::OrdStatus::PendingNew;
+    case '6': return core::OrdStatus::CancelPending;
     case '1': return core::OrdStatus::PartiallyFilled;
     case '2': return core::OrdStatus::Filled;
     case '4': return core::OrdStatus::Canceled;

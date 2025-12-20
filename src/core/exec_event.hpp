@@ -11,7 +11,18 @@ namespace core {
 
 enum class Source : uint8_t { Primary = 0, DropCopy = 1 };
 enum class ExecType : uint8_t { New, PartialFill, Fill, Cancel, Replace, Rejected, Unknown };
-enum class OrdStatus : uint8_t { New, PartiallyFilled, Filled, Canceled, Replaced, Rejected, Unknown };
+enum class OrdStatus : uint8_t {
+    New = 0,
+    PartiallyFilled = 1,
+    Filled = 2,
+    Canceled = 3,
+    Replaced = 4,
+    Rejected = 5,
+    Unknown = 6,
+    PendingNew = 7,
+    Working = 8,
+    CancelPending = 9
+};
 
 struct ExecEvent {
     Source source{};
