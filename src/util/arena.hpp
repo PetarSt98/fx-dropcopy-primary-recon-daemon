@@ -26,11 +26,15 @@ public:
     Arena& operator=(Arena&&) = default;
 
     [[nodiscard]] void* allocate(std::size_t size, std::size_t alignment) noexcept {
-        if (alignment == 0) {
+        if (alignment == 0 || !buffer_) {
             return nullptr;
         }
 
-        const std::size_t aligned_offset = align_up(offset_, alignment);
+        const auto base = reinterpret_cast<std::uintptr_t>(buffer_.get());
+        const std::uintptr_t current = base + offset_;
+        const std::uintptr_t aligned_addr = align_up(current, alignment);
+        const std::size_t aligned_offset = aligned_addr - base;
+
         if (aligned_offset > capacity_bytes_) {
             return nullptr;
         }
@@ -47,8 +51,8 @@ public:
     void reset() noexcept { offset_ = 0; }
 
 private:
-    static constexpr std::size_t align_up(std::size_t value, std::size_t alignment) noexcept {
-        const std::size_t remainder = value % alignment;
+    static constexpr std::uintptr_t align_up(std::uintptr_t value, std::size_t alignment) noexcept {
+        const std::uintptr_t remainder = value % static_cast<std::uintptr_t>(alignment);
         return remainder == 0 ? value : value + (alignment - remainder);
     }
 
