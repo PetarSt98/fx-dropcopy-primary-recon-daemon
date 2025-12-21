@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 #include "util/log.hpp"
 
@@ -196,40 +197,19 @@ void AuditLogWriter::flush_batch() {
 bool AuditLogWriter::writev_fully(const struct iovec* iov, int iovcnt) {
     std::array<struct iovec, 4> tmp{};
     std::vector<struct iovec> dynamic;
-    const struct iovec* cur = iov;
+    struct iovec* cur = nullptr;
     int cur_cnt = iovcnt;
 
-    auto make_span = [&](std::size_t offset) {
-        if (iovcnt <= static_cast<int>(tmp.size())) {
-            for (int i = 0; i < iovcnt; ++i) {
-                tmp[i] = iov[i];
-            }
-            cur = tmp.data();
-        } else {
-            dynamic.assign(iov, iov + iovcnt);
-            cur = dynamic.data();
+    if (iovcnt <= static_cast<int>(tmp.size())) {
+        for (int i = 0; i < iovcnt; ++i) {
+            tmp[i] = iov[i];
         }
-        cur_cnt = iovcnt;
-        if (offset > 0) {
-            std::size_t off = offset;
-            int idx = 0;
-            while (idx < cur_cnt && off >= cur[idx].iov_len) {
-                off -= cur[idx].iov_len;
-                ++idx;
-            }
-            if (idx >= cur_cnt) {
-                cur_cnt = 0;
-                return;
-            }
-            cur += idx;
-            cur_cnt -= idx;
-            cur[0].iov_base = reinterpret_cast<std::byte*>(cur[0].iov_base) + off;
-            cur[0].iov_len -= off;
-        }
-    };
+        cur = tmp.data();
+    } else {
+        dynamic.assign(iov, iov + iovcnt);
+        cur = dynamic.data();
+    }
 
-    make_span(0);
-    std::size_t written_total = 0;
     while (cur_cnt > 0) {
         std::size_t bytes_written = 0;
         auto res = sink_->writev(cur, cur_cnt, bytes_written);
@@ -252,10 +232,20 @@ bool AuditLogWriter::writev_fully(const struct iovec* iov, int iovcnt) {
             counters_.audit_io_errors.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        written_total += bytes_written;
-        make_span(written_total);
+
+        std::size_t remaining = bytes_written;
+        while (remaining > 0 && cur_cnt > 0) {
+            if (remaining < cur[0].iov_len) {
+                cur[0].iov_base = static_cast<std::byte*>(cur[0].iov_base) + remaining;
+                cur[0].iov_len -= remaining;
+                remaining = 0;
+            } else {
+                remaining -= cur[0].iov_len;
+                ++cur;
+                --cur_cnt;
+            }
+        }
     }
-    (void)written_total;
     return true;
 }
 

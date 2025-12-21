@@ -47,6 +47,7 @@ add_library(fx_core
     src/persist/wire_capture_writer.cpp
     src/persist/wire_log_format.hpp
     src/persist/capture_ring.hpp
+    src/persist/endianness.hpp
     src/persist/audit_log_format.hpp
     src/persist/audit_log_writer.cpp
 )
