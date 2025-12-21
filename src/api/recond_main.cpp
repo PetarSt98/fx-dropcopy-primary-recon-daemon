@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
 
     persist::WireCaptureConfig capture_cfg;
-    persist::WireCaptureWriter capture_writer(capture_cfg);
+    persist::WireCaptureWriter capture_writer(std::move(capture_cfg));
     capture_writer.start();
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
