@@ -47,6 +47,8 @@ add_library(fx_core
     src/persist/wire_capture_writer.cpp
     src/persist/wire_log_format.hpp
     src/persist/capture_ring.hpp
+    src/persist/audit_log_format.hpp
+    src/persist/audit_log_writer.cpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -206,6 +208,9 @@ add_executable(unit_tests_gtest
     tests/reconciler_sequence_tests.cpp
     tests/wire_log_format_tests.cpp
     tests/wire_capture_writer_tests.cpp
+    tests/audit_log_format_tests.cpp
+    tests/audit_log_writer_tests.cpp
+    tests/audit_log_integration_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
