@@ -199,7 +199,7 @@ TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
     context.aeronDir(aeron_dir.string());
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, nullptr);
     ingest::AeronSubscriber primary_sub(primary_channel,
                                         primary_stream,
                                         *primary_ring,

@@ -3,17 +3,25 @@
 #include <atomic>
 #include <thread>
 #include <cstdint>
+#include <cstddef>
 
 #include "core/order_state_store.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "core/exec_event.hpp"
 #include "core/divergence.hpp"
 #include "core/sequence_tracker.hpp"
+#include "persist/audit_log_format.hpp"
 
 namespace core {
 
-using DivergenceRing = ingest::SpscRing<Divergence, 1u << 16>;
-using SequenceGapRing = ingest::SpscRing<SequenceGapEvent, 1u << 16>;
+template <std::size_t Capacity = 4096>
+using DivergenceRingT = ingest::SpscRing<Divergence, Capacity>;
+
+template <std::size_t Capacity = 4096>
+using SequenceGapRingT = ingest::SpscRing<SequenceGapEvent, Capacity>;
+
+using DivergenceRing = DivergenceRingT<>;
+using SequenceGapRing = SequenceGapRingT<>;
 
 struct ReconCounters {
     std::uint64_t internal_events{0};
@@ -46,7 +54,8 @@ public:
                OrderStateStore& store,
                ReconCounters& counters,
                DivergenceRing& divergence_ring,
-               SequenceGapRing& seq_gap_ring) noexcept;
+               SequenceGapRing& seq_gap_ring,
+               persist::AuditLogCounters* audit_counters = nullptr) noexcept;
 
     void run();
     void process_event_for_test(const ExecEvent& ev) noexcept { process_event(ev); }
@@ -66,6 +75,7 @@ private:
     ReconCounters& counters_;
     DivergenceRing& divergence_ring_;
     SequenceGapRing& seq_gap_ring_;
+    persist::AuditLogCounters* audit_counters_;
 
     SequenceTracker primary_seq_tracker_{};
     SequenceTracker dropcopy_seq_tracker_{};

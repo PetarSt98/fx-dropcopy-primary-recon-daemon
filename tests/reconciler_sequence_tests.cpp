@@ -36,7 +36,8 @@ struct Harness {
                      store,
                      counters,
                      *divergence_ring,
-                     *seq_gap_ring) {}
+                     *seq_gap_ring,
+                     nullptr) {}
 };
 
 class ReconcilerSequenceTest : public ::testing::Test {

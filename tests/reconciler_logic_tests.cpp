@@ -33,13 +33,14 @@ struct Harness {
           divergence_ring(std::make_unique<core::DivergenceRing>()),
           seq_gap_ring(std::make_unique<core::SequenceGapRing>()),
           store(arena, capacity_hint),
-          reconciler(stop_flag,
-                     *primary_ring,
-                     *dropcopy_ring,
-                     store,
-                     counters,
-                     *divergence_ring,
-                     *seq_gap_ring) {}
+        reconciler(stop_flag,
+                   *primary_ring,
+                   *dropcopy_ring,
+                   store,
+                   counters,
+                   *divergence_ring,
+                   *seq_gap_ring,
+                   nullptr) {}
 };
 
 class ReconcilerLogicTest : public ::testing::Test {

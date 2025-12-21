@@ -8,6 +8,7 @@
 #include <bit>
 
 #include "util/crc32c.hpp"
+#include "persist/endianness.hpp"
 
 namespace persist {
 
@@ -25,31 +26,12 @@ inline std::uint32_t crc32c(std::span<const std::byte> payload) noexcept {
     return util::Crc32c::compute(payload.data(), payload.size());
 }
 
-constexpr std::uint32_t byteswap32(std::uint32_t v) noexcept {
-    return ((v & 0xFF000000u) >> 24) |
-           ((v & 0x00FF0000u) >> 8) |
-           ((v & 0x0000FF00u) << 8) |
-           ((v & 0x000000FFu) << 24);
-}
-
-inline constexpr std::uint32_t to_le(std::uint32_t v) noexcept {
-    if constexpr (std::endian::native == std::endian::little) {
-        return v;
-    } else {
-        return byteswap32(v);
-    }
-}
-
-inline constexpr std::uint32_t from_le(std::uint32_t v) noexcept {
-    return to_le(v);
-}
-
 inline void encode_record(std::span<const std::byte> payload,
                           std::uint32_t checksum,
                           std::uint32_t& length_le,
                           std::uint32_t& checksum_le) noexcept {
-    length_le = to_le(static_cast<std::uint32_t>(payload.size()));
-    checksum_le = to_le(checksum);
+    length_le = to_le32(static_cast<std::uint32_t>(payload.size()));
+    checksum_le = to_le32(checksum);
 }
 
 inline bool parse_record(const std::byte* data,
@@ -59,14 +41,14 @@ inline bool parse_record(const std::byte* data,
         return false;
     }
     const auto len_le = *reinterpret_cast<const std::uint32_t*>(data);
-    const std::uint32_t payload_len = from_le(len_le);
+    const std::uint32_t payload_len = from_le32(len_le);
     const std::size_t total = framed_size(payload_len);
     if (total > size) {
         return false;
     }
     out.payload_length = payload_len;
     out.payload = std::span<const std::byte>(data + sizeof(std::uint32_t), payload_len);
-    out.checksum = from_le(*reinterpret_cast<const std::uint32_t*>(data + sizeof(std::uint32_t) + payload_len));
+    out.checksum = from_le32(*reinterpret_cast<const std::uint32_t*>(data + sizeof(std::uint32_t) + payload_len));
     return true;
 }
 

@@ -14,14 +14,16 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        OrderStateStore& store,
                        ReconCounters& counters,
                        DivergenceRing& divergence_ring,
-                       SequenceGapRing& seq_gap_ring) noexcept
+                       SequenceGapRing& seq_gap_ring,
+                       persist::AuditLogCounters* audit_counters) noexcept
     : stop_flag_(stop_flag),
       primary_(primary),
       dropcopy_(dropcopy),
       store_(store),
       counters_(counters),
       divergence_ring_(divergence_ring),
-      seq_gap_ring_(seq_gap_ring) {}
+      seq_gap_ring_(seq_gap_ring),
+      audit_counters_(audit_counters) {}
 
 void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
     switch (type) {
@@ -79,6 +81,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
         if (!seq_gap_ring_.try_push(gap_ev)) {
             ++counters_.sequence_gap_ring_drops;
+            if (audit_counters_) {
+                audit_counters_->audit_drop_gaps.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
 
@@ -106,6 +111,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         fill_divergence_snapshot(*st, DivergenceType::StateMismatch, div);
         if (!divergence_ring_.try_push(div)) {
             ++counters_.divergence_ring_drops;
+            if (audit_counters_) {
+                audit_counters_->audit_drop_divergence.fetch_add(1, std::memory_order_relaxed);
+            }
         } else {
             ++counters_.divergence_total;
             increment_divergence_counter(div.type);
@@ -117,6 +125,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
     if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
         if (!divergence_ring_.try_push(div)) {
             ++counters_.divergence_ring_drops;
+            if (audit_counters_) {
+                audit_counters_->audit_drop_divergence.fetch_add(1, std::memory_order_relaxed);
+            }
             return;
         }
         ++counters_.divergence_total;

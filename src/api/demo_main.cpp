@@ -13,6 +13,7 @@
 #include "util/arena.hpp"
 #include "util/log.hpp"
 #include "util/soh.hpp"
+#include "persist/audit_log_writer.hpp"
 
 // SPSC rings are fixed-size (power of two). On push failure the caller drops and counts the
 // message; no blocking or heap fallback in the hot path.
@@ -65,6 +66,7 @@ int main() {
     Ring dropcopy_ring;
     core::DivergenceRing divergence_ring;
     core::SequenceGapRing seq_gap_ring;
+    persist::AuditLogCounters audit_counters;
 
     ThreadStats primary_stats;
     ThreadStats dropcopy_stats;
@@ -73,7 +75,9 @@ int main() {
     constexpr std::size_t order_capacity_hint = 1u << 14;
     core::OrderStateStore store(arena, order_capacity_hint);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, &audit_counters);
+    persist::AuditLogWriter audit_writer(divergence_ring, seq_gap_ring, audit_counters, {});
+    audit_writer.start();
 
     std::thread primary([&] { ingest_thread(stop_flag, primary_ring, primary_stats, core::Source::Primary); });
     std::thread dropcopy([&] { ingest_thread(stop_flag, dropcopy_ring, dropcopy_stats, core::Source::DropCopy); });
@@ -86,6 +90,7 @@ int main() {
     primary.join();
     dropcopy.join();
     recon_thread.join();
+    audit_writer.stop();
 
     std::cout << "Primary produced: " << primary_stats.produced << " drops: " << primary_stats.drops
               << " parse_failures: " << primary_stats.parse_failures << "\n";
