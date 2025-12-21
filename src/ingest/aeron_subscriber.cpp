@@ -58,6 +58,10 @@ void AeronSubscriber::run() {
                        aeron::util::index_t offset,
                        aeron::util::index_t length,
                        const concurrent::logbuffer::Header&) {
+        if (capture_writer_) {
+            const auto* ptr = reinterpret_cast<const std::byte*>(buffer.buffer() + offset);
+            capture_writer_->try_submit(std::span<const std::byte>(ptr, static_cast<std::size_t>(length)));
+        }
         if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
             ++stats_.parse_failures;
             return;

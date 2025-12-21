@@ -41,6 +41,12 @@ add_library(fx_core
     src/util/log.hpp
     src/util/soh.hpp
     src/util/arena.hpp
+    src/util/clock.hpp
+    src/util/crc32c.hpp
+    src/persist/file_sink.cpp
+    src/persist/wire_capture_writer.cpp
+    src/persist/wire_log_format.hpp
+    src/persist/capture_ring.hpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -198,6 +204,8 @@ add_executable(unit_tests_gtest
     tests/reconciler_logic_tests.cpp
     tests/sequence_tracker_tests.cpp
     tests/reconciler_sequence_tests.cpp
+    tests/wire_log_format_tests.cpp
+    tests/wire_capture_writer_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
