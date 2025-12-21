@@ -119,6 +119,11 @@ WireLogReadResult WireLogReader::next(core::WireExecEvent& out, std::uint64_t& o
                 return {WireLogReadStatus::IoError};
             }
         }
+        if (offset_ == current_size_) {
+            ++file_index_;
+            close_file();
+            continue;
+        }
         if (offset_ + framed_size(0) > current_size_) {
             return handle_truncated();
         }
