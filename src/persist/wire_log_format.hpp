@@ -12,6 +12,11 @@
 
 namespace persist {
 
+// Wire log record framing used by WireCaptureWriter and WireLogReader:
+//   [u32 payload_len_le][payload bytes][u32 crc32c_le]
+// The payload is a raw serialization of core::WireExecEvent. There is no file
+// header or per-record capture timestamp in the current writer.
+
 struct WireRecordView {
     std::uint32_t payload_length{0};
     std::span<const std::byte> payload{};
