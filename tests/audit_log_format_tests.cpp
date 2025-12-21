@@ -82,6 +82,11 @@ TEST(AuditLogFormat, SchemaMismatchRejected) {
     ASSERT_TRUE(persist::encode_divergence_record_v1(div, buf, written));
     // Overwrite schema version to 2 ( > current).
     persist::store_le16(2, buf.data() + persist::header_size);
+    const auto new_crc = persist::compute_record_crc(buf.data(),
+                                                     persist::header_size,
+                                                     buf.data() + persist::header_size,
+                                                     persist::divergence_payload_v1_size);
+    persist::store_le32(new_crc, buf.data() + persist::header_size + persist::divergence_payload_v1_size);
     persist::AuditLogCounters ctrs{};
     persist::DecodedRecord decoded{};
     auto err = persist::decode_record(std::span<const std::byte>(buf.data(), written), decoded, &ctrs);
@@ -96,6 +101,11 @@ TEST(AuditLogFormat, InvalidLengthRejected) {
     ASSERT_TRUE(persist::encode_gap_record_v1(gap, buf, written));
     // Tamper payload_len to mismatch expected size.
     persist::store_le32(static_cast<std::uint32_t>(persist::gap_payload_v1_size - 1), buf.data() + 4);
+    const auto new_crc = persist::compute_record_crc(buf.data(),
+                                                     persist::header_size,
+                                                     buf.data() + persist::header_size,
+                                                     persist::gap_payload_v1_size);
+    persist::store_le32(new_crc, buf.data() + persist::header_size + persist::gap_payload_v1_size);
     persist::AuditLogCounters ctrs{};
     persist::DecodedRecord decoded{};
     auto err = persist::decode_record(std::span<const std::byte>(buf.data(), written), decoded, &ctrs);
@@ -132,4 +142,3 @@ TEST(AuditLogFormat, CrcValidation) {
 }
 
 } // namespace
-
