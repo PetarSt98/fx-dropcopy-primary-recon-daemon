@@ -2,9 +2,11 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <vector>
 
+#include <gtest/gtest.h>
 #include <concurrent/AtomicBuffer.h>
 #include <concurrent/logbuffer/FrameDescriptor.h>
 #include <concurrent/logbuffer/LogBufferDescriptor.h>
@@ -14,10 +16,18 @@
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_client_view.hpp"
 #include "ingest/aeron_subscriber.hpp"
-#include "test_main.hpp"
 
 namespace aeron_subscriber_tests {
 namespace {
+
+struct ThreadJoiner {
+    std::thread& t;
+    ~ThreadJoiner() {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+};
 
 struct StubSubscription final : public ingest::SubscriptionView {
     struct Fragment {
@@ -78,7 +88,13 @@ core::WireExecEvent make_wire() {
     return wire;
 }
 
-bool test_subscriber_delivers_fragment() {
+class AeronSubscriberTest : public ::testing::Test {
+protected:
+    static constexpr std::chrono::milliseconds kWaitInterval{10};
+    static constexpr std::chrono::milliseconds kMaxWait{1000};
+};
+
+TEST_F(AeronSubscriberTest, SubscriberDeliversFragment) {
     auto ring = std::make_unique<ingest::Ring>();
     ingest::ThreadStats stats;
     std::atomic<bool> stop{false};
@@ -93,17 +109,24 @@ bool test_subscriber_delivers_fragment() {
     ingest::AeronSubscriber subscriber("", 1, *ring, stats, core::Source::Primary, client, stop);
 
     std::thread t([&] { subscriber.run(); });
-    while (stats.produced == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ThreadJoiner joiner{t};
+
+    const auto deadline = std::chrono::steady_clock::now() + kMaxWait;
+    while (stats.produced == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(kWaitInterval);
     }
+
     stop.store(true, std::memory_order_release);
-    t.join();
+
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "Timed out waiting for subscriber to produce";
 
     core::ExecEvent evt{};
-    return ring->try_pop(evt) && stats.produced == 1 && evt.exec_id[0] == 'E';
+    ASSERT_TRUE(ring->try_pop(evt));
+    EXPECT_EQ(stats.produced, 1);
+    EXPECT_EQ(std::string_view(evt.exec_id, evt.exec_id_len), "EX1");
 }
 
-bool test_subscriber_counts_parse_failure() {
+TEST_F(AeronSubscriberTest, SubscriberCountsParseFailure) {
     auto ring = std::make_unique<ingest::Ring>();
     ingest::ThreadStats stats;
     std::atomic<bool> stop{false};
@@ -115,20 +138,19 @@ bool test_subscriber_counts_parse_failure() {
     ingest::AeronSubscriber subscriber("", 1, *ring, stats, core::Source::Primary, client, stop);
 
     std::thread t([&] { subscriber.run(); });
-    while (stats.parse_failures == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    stop.store(true, std::memory_order_release);
-    t.join();
+    ThreadJoiner joiner{t};
 
-    return stats.parse_failures == 1 && ring->size_approx() == 0;
+    const auto deadline = std::chrono::steady_clock::now() + kMaxWait;
+    while (stats.parse_failures == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(kWaitInterval);
+    }
+
+    stop.store(true, std::memory_order_release);
+
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "Timed out waiting for parse failure";
+    EXPECT_EQ(stats.parse_failures, 1);
+    EXPECT_EQ(ring->size_approx(), 0u);
 }
 
 } // namespace
-
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"subscriber_delivers_fragment", test_subscriber_delivers_fragment});
-    tests.push_back({"subscriber_counts_parse_failure", test_subscriber_counts_parse_failure});
-}
-
 } // namespace aeron_subscriber_tests

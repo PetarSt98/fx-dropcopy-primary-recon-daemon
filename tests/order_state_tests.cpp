@@ -1,9 +1,10 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
+
 #include "core/order_state.hpp"
 
-namespace order_state_tests {
+namespace {
 
-bool test_order_key_stability() {
+TEST(OrderStateTest, OrderKeyStability) {
     core::ExecEvent evt{};
     evt.set_clord_id("ABC123", 6);
     const core::OrderKey key1 = core::make_order_key(evt);
@@ -13,33 +14,32 @@ bool test_order_key_stability() {
     other.set_clord_id("XYZ789", 6);
     const core::OrderKey key3 = core::make_order_key(other);
 
-    return key1 == key2 && key1 != key3;
+    EXPECT_EQ(key1, key2);
+    EXPECT_NE(key1, key3);
 }
 
-bool test_create_order_state_initialization() {
+TEST(OrderStateTest, CreateOrderStateInitialization) {
     util::Arena arena(1024);
     constexpr core::OrderKey expected_key = 42;
     core::OrderState* state = core::create_order_state(arena, expected_key);
-    if (!state) {
-        return false;
-    }
+    ASSERT_NE(state, nullptr);
 
-    bool ok = state->key == expected_key;
-    ok = ok && state->internal_cum_qty == 0 && state->internal_avg_px == 0;
-    ok = ok && state->dropcopy_cum_qty == 0 && state->dropcopy_avg_px == 0;
-    ok = ok && state->internal_status == core::OrdStatus::Unknown;
-    ok = ok && state->dropcopy_status == core::OrdStatus::Unknown;
-    ok = ok && state->last_internal_exec_id_len == 0 && state->last_dropcopy_exec_id_len == 0;
-    ok = ok && !state->seen_internal && !state->seen_dropcopy;
-    ok = ok && !state->has_divergence && !state->has_gap;
-    ok = ok && state->divergence_count == 0;
-    ok = ok && state->last_internal_exec_id[0] == '\0' && state->last_dropcopy_exec_id[0] == '\0';
-    return ok;
+    EXPECT_EQ(state->key, expected_key);
+    EXPECT_EQ(state->internal_cum_qty, 0);
+    EXPECT_EQ(state->internal_avg_px, 0);
+    EXPECT_EQ(state->dropcopy_cum_qty, 0);
+    EXPECT_EQ(state->dropcopy_avg_px, 0);
+    EXPECT_EQ(state->internal_status, core::OrdStatus::Unknown);
+    EXPECT_EQ(state->dropcopy_status, core::OrdStatus::Unknown);
+    EXPECT_EQ(state->last_internal_exec_id_len, 0);
+    EXPECT_EQ(state->last_dropcopy_exec_id_len, 0);
+    EXPECT_FALSE(state->seen_internal);
+    EXPECT_FALSE(state->seen_dropcopy);
+    EXPECT_FALSE(state->has_divergence);
+    EXPECT_FALSE(state->has_gap);
+    EXPECT_EQ(state->divergence_count, 0);
+    EXPECT_EQ(state->last_internal_exec_id[0], '\0');
+    EXPECT_EQ(state->last_dropcopy_exec_id[0], '\0');
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"order_key_stability", test_order_key_stability});
-    tests.push_back({"create_order_state_initialization", test_create_order_state_initialization});
-}
-
-} // namespace order_state_tests
+} // namespace

@@ -1,42 +1,47 @@
-#include "test_main.hpp"
+#include <gtest/gtest.h>
+
 #include "ingest/spsc_ring.hpp"
 #include "core/exec_event.hpp"
 
 using Ring = ingest::SpscRing<core::ExecEvent, 8>;
 
-namespace ring_tests {
+namespace {
 
-bool test_push_pop_order() {
-    Ring ring;
-    core::ExecEvent a{}; a.qty = 1;
-    core::ExecEvent b{}; b.qty = 2;
+class SpscRingTest : public ::testing::Test {
+protected:
+    Ring ring_{};
+    core::ExecEvent evt_{};
+};
+
+TEST_F(SpscRingTest, PushPopOrder) {
+    core::ExecEvent first{};
+    first.qty = 1;
+    core::ExecEvent second{};
+    second.qty = 2;
     core::ExecEvent out{};
-    bool ok = ring.try_push(a);
-    ok = ok && ring.try_push(b);
-    ok = ok && ring.try_pop(out) && out.qty == 1;
-    ok = ok && ring.try_pop(out) && out.qty == 2;
-    return ok;
+
+    ASSERT_TRUE(ring_.try_push(first));
+    ASSERT_TRUE(ring_.try_push(second));
+
+    ASSERT_TRUE(ring_.try_pop(out));
+    EXPECT_EQ(out.qty, 1);
+
+    ASSERT_TRUE(ring_.try_pop(out));
+    EXPECT_EQ(out.qty, 2);
 }
 
-bool test_full_empty_behavior() {
-    Ring ring;
-    core::ExecEvent evt{};
-    bool ok = true;
+TEST_F(SpscRingTest, FullEmptyBehavior) {
     for (int i = 0; i < 7; ++i) {
-        ok = ok && ring.try_push(evt);
+        ASSERT_TRUE(ring_.try_push(evt_)) << "Failed to push at index " << i;
     }
-    // ring is full now; next push should fail
-    ok = ok && !ring.try_push(evt);
+
+    EXPECT_FALSE(ring_.try_push(evt_)) << "Push should fail when the ring is full";
+
     for (int i = 0; i < 7; ++i) {
-        ok = ok && ring.try_pop(evt);
+        ASSERT_TRUE(ring_.try_pop(evt_)) << "Failed to pop at index " << i;
     }
-    ok = ok && !ring.try_pop(evt);
-    return ok;
+
+    EXPECT_FALSE(ring_.try_pop(evt_)) << "Pop should fail when the ring is empty";
 }
 
-void add_tests(std::vector<TestCase>& tests) {
-    tests.push_back({"push_pop_order", test_push_pop_order});
-    tests.push_back({"full_empty_behavior", test_full_empty_behavior});
-}
-
-} // namespace ring_tests
+} // namespace
