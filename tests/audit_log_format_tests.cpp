@@ -100,12 +100,13 @@ TEST(AuditLogFormat, InvalidLengthRejected) {
     std::size_t written = 0;
     ASSERT_TRUE(persist::encode_gap_record_v1(gap, buf, written));
     // Tamper payload_len to mismatch expected size.
-    persist::store_le32(static_cast<std::uint32_t>(persist::gap_payload_v1_size - 1), buf.data() + 4);
+    const std::uint32_t tampered_len = static_cast<std::uint32_t>(persist::gap_payload_v1_size - 1);
+    persist::store_le32(tampered_len, buf.data() + 4);
     const auto new_crc = persist::compute_record_crc(buf.data(),
                                                      persist::header_size,
                                                      buf.data() + persist::header_size,
-                                                     persist::gap_payload_v1_size);
-    persist::store_le32(new_crc, buf.data() + persist::header_size + persist::gap_payload_v1_size);
+                                                     tampered_len);
+    persist::store_le32(new_crc, buf.data() + persist::header_size + tampered_len);
     persist::AuditLogCounters ctrs{};
     persist::DecodedRecord decoded{};
     auto err = persist::decode_record(std::span<const std::byte>(buf.data(), written), decoded, &ctrs);
