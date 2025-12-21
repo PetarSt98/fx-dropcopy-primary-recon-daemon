@@ -13,17 +13,18 @@ namespace {
 
 std::vector<std::byte> read_file_bytes(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
-    std::vector<std::byte> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<char> tmp((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<std::byte> data;
+    data.reserve(tmp.size());
+    for (char c : tmp) {
+        data.push_back(static_cast<std::byte>(static_cast<unsigned char>(c)));
+    }
     return data;
 }
 
-struct Parsed {
-    std::vector<persist::DecodedRecord> records;
-    persist::AuditLogCounters parse_counters;
-};
-
-Parsed parse_dir(const std::filesystem::path& dir) {
-    Parsed out;
+std::vector<persist::DecodedRecord> parse_dir(const std::filesystem::path& dir,
+                                              persist::AuditLogCounters& counters) {
+    std::vector<persist::DecodedRecord> out;
     for (auto& entry : std::filesystem::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         auto data = read_file_bytes(entry.path());
@@ -31,9 +32,9 @@ Parsed parse_dir(const std::filesystem::path& dir) {
         while (offset < data.size()) {
             persist::DecodedRecord rec{};
             auto err = persist::decode_record(std::span<const std::byte>(data.data() + offset, data.size() - offset),
-                                              rec, &out.parse_counters);
+                                              rec, &counters);
             if (err == persist::DecodeError::Ok) {
-                out.records.push_back(rec);
+                out.push_back(rec);
                 offset += persist::record_size_from_payload(rec.payload_len);
             } else if (err == persist::DecodeError::TruncatedAtEnd) {
                 break; // graceful EOF
@@ -107,14 +108,15 @@ TEST(AuditLogIntegration, RoundTripEncodeDecode) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     writer.stop();
 
-    auto parsed = parse_dir(tmpdir);
-    EXPECT_EQ(parsed.records.size(), static_cast<std::size_t>(kDiv + kGap));
+    persist::AuditLogCounters parse_ctrs;
+    auto parsed = parse_dir(tmpdir, parse_ctrs);
+    EXPECT_EQ(parsed.size(), static_cast<std::size_t>(kDiv + kGap));
     EXPECT_EQ(ctrs.writer_drop_divergence.load(), 0);
     EXPECT_EQ(ctrs.writer_drop_gaps.load(), 0);
     EXPECT_EQ(ctrs.audit_drop_divergence.load(), 0);
     EXPECT_EQ(ctrs.audit_drop_gaps.load(), 0);
-    EXPECT_EQ(parsed.parse_counters.audit_parse_errors_crc.load(), 0);
-    EXPECT_EQ(parsed.parse_counters.audit_parse_errors_truncated.load(), 0);
+    EXPECT_EQ(parse_ctrs.audit_parse_errors_crc.load(), 0);
+    EXPECT_EQ(parse_ctrs.audit_parse_errors_truncated.load(), 0);
 }
 
 TEST(AuditLogIntegration, BackpressureDropsCounted) {
@@ -140,9 +142,10 @@ TEST(AuditLogIntegration, BackpressureDropsCounted) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     writer.stop();
 
-    auto parsed = parse_dir(tmpdir);
+    persist::AuditLogCounters parse_ctrs;
+    auto parsed = parse_dir(tmpdir, parse_ctrs);
     const std::size_t expected_records = 6000 - drops;
-    EXPECT_EQ(parsed.records.size(), expected_records);
+    EXPECT_EQ(parsed.size(), expected_records);
     EXPECT_EQ(ctrs.audit_drop_divergence.load(), drops);
 }
 
