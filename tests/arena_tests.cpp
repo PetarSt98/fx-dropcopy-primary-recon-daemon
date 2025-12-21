@@ -8,7 +8,8 @@ namespace {
 
 class ArenaTest : public ::testing::Test {
 protected:
-    util::Arena arena_{64};
+    // Small capacity to exercise exhaustion paths deterministically.
+    util::Arena arena_{32};
 };
 
 TEST_F(ArenaTest, BasicAllocation) {
