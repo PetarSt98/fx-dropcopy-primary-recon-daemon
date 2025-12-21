@@ -160,7 +160,7 @@ TEST(WireCaptureWriter, RotationBySize) {
     writer.stop();
     ASSERT_GE(sinks.size(), 2u);
     int records = 0;
-    for (auto* s : sinks) {
+    for (const auto& s : sinks) {
         auto recs = parse_records(s->data_);
         records += static_cast<int>(recs.size());
     }
