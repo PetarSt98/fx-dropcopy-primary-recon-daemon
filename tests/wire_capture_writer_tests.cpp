@@ -81,6 +81,21 @@ public:
     std::uint64_t size_bytes_{0};
 };
 
+class HolderSink : public persist::IFileSink {
+public:
+    explicit HolderSink(std::shared_ptr<FakeFileSink> impl) : impl_(std::move(impl)) {}
+
+    persist::IoResult open(const std::string& path) noexcept override { return impl_->open(path); }
+    void close() noexcept override { impl_->close(); }
+    persist::IoResult writev(const struct iovec* iov, int iovcnt, std::size_t& bytes_written) noexcept override {
+        return impl_->writev(iov, iovcnt, bytes_written);
+    }
+    std::uint64_t current_size() const noexcept override { return impl_->current_size(); }
+    bool is_open() const noexcept override { return impl_->is_open(); }
+
+    std::shared_ptr<FakeFileSink> impl_;
+};
+
 std::vector<persist::WireRecordView> parse_records(const std::vector<std::byte>& bytes) {
     std::vector<persist::WireRecordView> out;
     std::size_t offset = 0;
@@ -126,15 +141,15 @@ TEST(WireCaptureWriter, HandlesPartialWritesAndEintr) {
 TEST(WireCaptureWriter, RotationBySize) {
     auto steady = std::make_unique<FakeSteadyClock>();
     auto sys = std::make_unique<FakeSystemClock>();
-    std::vector<FakeFileSink*> sinks;
+    std::vector<std::shared_ptr<FakeFileSink>> sinks;
     persist::WireCaptureConfig cfg;
     cfg.rotate_max_bytes = persist::framed_size(4) + 1; // rotate after each record
     cfg.steady_clock = std::move(steady);
     cfg.system_clock = std::move(sys);
     cfg.sink_factory = [&sinks]() {
-        auto ptr = std::make_unique<FakeFileSink>();
-        sinks.push_back(ptr.get());
-        return ptr;
+        auto impl = std::make_shared<FakeFileSink>();
+        sinks.push_back(impl);
+        return std::make_unique<HolderSink>(impl);
     };
     persist::WireCaptureWriter writer(std::move(cfg));
     writer.start();

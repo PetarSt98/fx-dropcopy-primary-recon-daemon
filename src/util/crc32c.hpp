@@ -9,7 +9,8 @@ namespace util {
 // Optional hardware acceleration can hook into compute() if proven equivalent via tests.
 namespace detail {
 
-constexpr std::uint32_t poly = 0x1EDC6F41u; // Castagnoli
+// Reflected Castagnoli polynomial for CRC32C
+constexpr std::uint32_t poly = 0x82F63B78u;
 
 constexpr std::uint32_t make_entry(std::uint32_t idx) noexcept {
     std::uint32_t c = idx;
