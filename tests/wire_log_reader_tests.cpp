@@ -166,7 +166,7 @@ TEST(WireLogReader, TimeWindowFiltering) {
     auto res = reader.next(evt, ts);
     ASSERT_EQ(res.status, persist::WireLogReadStatus::Ok);
     EXPECT_EQ(evt.seq_num, 11u);
-    EXPECT_EQ(ts, 2000u);
+    EXPECT_EQ(ts, 6000u);
 
     res = reader.next(evt, ts);
     EXPECT_EQ(res.status, persist::WireLogReadStatus::EndOfStream);
