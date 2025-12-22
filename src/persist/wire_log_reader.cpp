@@ -164,7 +164,7 @@ WireLogReadResult WireLogReader::next(core::WireExecEvent& out, std::uint64_t& o
 
         deserialize_wire_exec_event(out, reinterpret_cast<const std::uint8_t*>(view.payload.data()));
         const auto filter_ts = view.capture_ts;
-        out_capture_ts = out.sending_time;
+        out_capture_ts = view.capture_ts;
 
         if (!passes_time_window(filter_ts)) {
             ++stats_.filtered_out;
