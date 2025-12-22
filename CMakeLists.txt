@@ -219,5 +219,20 @@ gtest_discover_tests(integration_aeron_flow
   DISCOVERY_MODE PRE_TEST
 )
 
+add_executable(fx_e2e_tests
+    tests/e2e/aeron_test_harness.cpp
+    tests/e2e/e2e_aeron_reconciler_tests.cpp
+    src/ingest/aeron_subscriber.cpp
+    src/core/reconciler.cpp
+)
+target_include_directories(fx_e2e_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(fx_e2e_tests PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+
+gtest_discover_tests(fx_e2e_tests
+  TEST_PREFIX e2e_
+  DISCOVERY_MODE PRE_TEST
+  PROPERTIES LABELS "e2e"
+)
+
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)

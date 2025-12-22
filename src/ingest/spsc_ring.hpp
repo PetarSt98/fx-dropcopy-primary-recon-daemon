@@ -15,6 +15,8 @@ class alignas(64) SpscRing {
                   "Capacity must be power of two");
 
 public:
+    using value_type = T;
+
     SpscRing() : head_(0), tail_(0) {}
 
     bool try_push(const T& v) noexcept {
