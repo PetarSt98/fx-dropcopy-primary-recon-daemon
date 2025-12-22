@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -29,10 +30,10 @@ using ExecRing = ingest::SpscRing<core::ExecEvent, 1u << 16>;
 
 struct ReplayState {
     std::atomic<bool> stop_flag{false};
-    ExecRing primary_ring;
-    ExecRing dropcopy_ring;
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing gap_ring;
+    std::unique_ptr<ExecRing> primary_ring;
+    std::unique_ptr<ExecRing> dropcopy_ring;
+    std::unique_ptr<core::DivergenceRing> divergence_ring;
+    std::unique_ptr<core::SequenceGapRing> gap_ring;
     persist::AuditLogCounters audit_counters;
     core::ReconCounters recon_counters;
 };
@@ -51,7 +52,10 @@ bool ensure_output_dir(const std::filesystem::path& p) {
 }
 
 bool rings_empty(const ReplayState& state) noexcept {
-    return state.primary_ring.size_approx() == 0 && state.dropcopy_ring.size_approx() == 0;
+    if (!state.primary_ring || !state.dropcopy_ring) {
+        return true;
+    }
+    return state.primary_ring->size_approx() == 0 && state.dropcopy_ring->size_approx() == 0;
 }
 
 void log_if(bool enabled, util::LogLevel lvl, const char* fmt, const char* arg0 = nullptr) {
@@ -145,17 +149,21 @@ int run_replay(const ReplayConfig& cfg) {
     log_if(info_logs, util::LogLevel::Info, "Replay input prepared", nullptr);
 
     ReplayState state;
+    state.primary_ring = std::make_unique<ExecRing>();
+    state.dropcopy_ring = std::make_unique<ExecRing>();
+    state.divergence_ring = std::make_unique<core::DivergenceRing>();
+    state.gap_ring = std::make_unique<core::SequenceGapRing>();
     util::Arena arena(util::Arena::default_capacity_bytes);
     constexpr std::size_t order_capacity_hint = 1u << 16;
     core::OrderStateStore store(arena, order_capacity_hint);
 
     core::Reconciler recon(state.stop_flag,
-                           state.primary_ring,
-                           state.dropcopy_ring,
+                           *state.primary_ring,
+                           *state.dropcopy_ring,
                            store,
                            state.recon_counters,
-                           state.divergence_ring,
-                           state.gap_ring,
+                           *state.divergence_ring,
+                           *state.gap_ring,
                            &state.audit_counters);
 
     persist::AuditLogConfig audit_cfg;
@@ -166,7 +174,7 @@ int run_replay(const ReplayConfig& cfg) {
         util::log(util::LogLevel::Error, "Failed to create output dir %s", audit_cfg.output_dir.string().c_str());
         return 1;
     }
-    persist::AuditLogWriter audit_writer(state.divergence_ring, state.gap_ring, state.audit_counters, audit_cfg);
+    persist::AuditLogWriter audit_writer(*state.divergence_ring, *state.gap_ring, state.audit_counters, audit_cfg);
 
     audit_writer.start();
     std::thread recon_thread([&] { recon.run(); });
@@ -194,7 +202,7 @@ int run_replay(const ReplayConfig& cfg) {
 
         const core::Source src = source_from_wire(wire);
         const core::ExecEvent evt = core::from_wire(wire, src, capture_ts);
-        ExecRing& ring = (src == core::Source::Primary) ? state.primary_ring : state.dropcopy_ring;
+        ExecRing& ring = (src == core::Source::Primary) ? *state.primary_ring : *state.dropcopy_ring;
 
         std::uint32_t backoff = 0;
         while (!ring.try_push(evt)) {
