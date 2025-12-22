@@ -22,6 +22,7 @@
 #include "core/reconciler.hpp"
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_subscriber.hpp"
+#include "persist/wire_log_format.hpp"
 #include "util/arena.hpp"
 
 namespace {
@@ -117,8 +118,8 @@ core::WireExecEvent make_wire_exec(std::size_t seq) {
 }
 
 bool publish(aeron::Publication& pub, const core::WireExecEvent& evt) {
-    std::array<std::uint8_t, sizeof(core::WireExecEvent)> buffer{};
-    std::memcpy(buffer.data(), &evt, sizeof(core::WireExecEvent));
+    std::array<std::uint8_t, persist::wire_exec_event_wire_size> buffer{};
+    persist::serialize_wire_exec_event(evt, buffer.data());
 
     aeron::concurrent::AtomicBuffer atomic_buffer(buffer.data(), buffer.size());
     return pub.offer(atomic_buffer, 0, static_cast<aeron::util::index_t>(buffer.size())) > 0;
@@ -199,7 +200,7 @@ TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
     context.aeronDir(aeron_dir.string());
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, nullptr);
     ingest::AeronSubscriber primary_sub(primary_channel,
                                         primary_stream,
                                         *primary_ring,

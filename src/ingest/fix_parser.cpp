@@ -149,7 +149,7 @@ ParseResult parse_exec_report(const char* data, std::size_t len, core::ExecEvent
         }
     }
 
-    out.ingest_tsc = util::rdtsc();
+    out.ingest_timestamp_ns = util::rdtsc();
 
     if (out.order_id_len == 0 && out.clord_id_len == 0) {
         return ParseResult::MissingField;

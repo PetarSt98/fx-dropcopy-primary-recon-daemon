@@ -36,7 +36,8 @@ struct Harness {
                      store,
                      counters,
                      *divergence_ring,
-                     *seq_gap_ring) {}
+                     *seq_gap_ring,
+                     nullptr) {}
 };
 
 class ReconcilerSequenceTest : public ::testing::Test {
@@ -50,7 +51,7 @@ protected:
         ev.cum_qty = 0;
         ev.qty = 0;
         ev.price_micro = 0;
-        ev.ingest_tsc = seq;
+        ev.ingest_timestamp_ns = seq;
         ev.set_clord_id(clord, std::strlen(clord));
         ev.set_exec_id("X", 1);
         return ev;

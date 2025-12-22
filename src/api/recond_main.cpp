@@ -12,6 +12,8 @@
 #include "core/reconciler.hpp"
 #include "core/order_state_store.hpp"
 #include "ingest/aeron_subscriber.hpp"
+#include "persist/wire_capture_writer.hpp"
+#include "persist/audit_log_writer.hpp"
 #include "util/arena.hpp"
 
 int main(int argc, char** argv) {
@@ -30,6 +32,7 @@ int main(int argc, char** argv) {
     ingest::Ring dropcopy_ring;
     core::DivergenceRing divergence_ring;
     core::SequenceGapRing seq_gap_ring;
+    persist::AuditLogCounters audit_counters;
 
     ingest::ThreadStats primary_stats;
     ingest::ThreadStats dropcopy_stats;
@@ -42,12 +45,20 @@ int main(int argc, char** argv) {
     aeron::Context context;
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, &audit_counters, &stop_flag);
+
+    persist::WireCaptureConfig capture_cfg;
+    persist::WireCaptureWriter capture_writer(std::move(capture_cfg));
+    capture_writer.start();
+    persist::AuditLogWriter audit_writer(divergence_ring, seq_gap_ring, audit_counters, {});
+    audit_writer.start();
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
                                         core::Source::Primary, client, stop_flag);
     ingest::AeronSubscriber dropcopy_sub(dropcopy_channel, dropcopy_stream, dropcopy_ring, dropcopy_stats,
                                          core::Source::DropCopy, client, stop_flag);
+    primary_sub.set_capture_writer(&capture_writer);
+    dropcopy_sub.set_capture_writer(&capture_writer);
 
     std::thread primary_thread([&] { primary_sub.run(); });
     std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
@@ -67,6 +78,8 @@ int main(int argc, char** argv) {
     primary_thread.join();
     dropcopy_thread.join();
     recon_thread.join();
+    capture_writer.stop();
+    audit_writer.stop();
 
     std::cout << "Primary produced: " << primary_stats.produced << " drops: " << primary_stats.drops
               << " parse_failures: " << primary_stats.parse_failures << "\n";
@@ -76,6 +89,11 @@ int main(int argc, char** argv) {
               << " dropcopy: " << counters.dropcopy_events << "\n";
     std::cout << "Divergences total: " << counters.divergence_total
               << " ring_drops: " << counters.divergence_ring_drops << "\n";
+    std::cout << "Audit drops (recon div/gap): " << audit_counters.audit_drop_divergence.load()
+              << "/" << audit_counters.audit_drop_gaps.load()
+              << " writer drops: " << audit_counters.writer_drop_divergence.load()
+              << "/" << audit_counters.writer_drop_gaps.load()
+              << " io_errors: " << audit_counters.audit_io_errors.load() << "\n";
 
     return 0;
 }

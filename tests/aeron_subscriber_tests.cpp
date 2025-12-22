@@ -16,6 +16,7 @@
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_client_view.hpp"
 #include "ingest/aeron_subscriber.hpp"
+#include "persist/wire_log_format.hpp"
 
 namespace aeron_subscriber_tests {
 namespace {
@@ -99,9 +100,9 @@ TEST_F(AeronSubscriberTest, SubscriberDeliversFragment) {
     ingest::ThreadStats stats;
     std::atomic<bool> stop{false};
 
-    std::vector<std::uint8_t> payload(sizeof(core::WireExecEvent));
+    std::vector<std::uint8_t> payload(persist::wire_exec_event_wire_size);
     const auto wire = make_wire();
-    std::memcpy(payload.data(), &wire, sizeof(wire));
+    persist::serialize_wire_exec_event(wire, payload.data());
 
     auto stub_sub = std::make_shared<StubSubscription>(std::vector{StubSubscription::Fragment{std::move(payload)}});
     auto client = std::make_shared<StubAeronClient>(stub_sub, 1);

@@ -11,6 +11,7 @@
 #include "core/wire_exec_event.hpp"
 #include "ingest/aeron_client_view.hpp"
 #include "ingest/spsc_ring.hpp"
+#include "persist/wire_capture_writer.hpp"
 
 namespace ingest {
 
@@ -42,6 +43,8 @@ public:
 
     void run();
 
+    void set_capture_writer(persist::WireCaptureWriter* writer) noexcept { capture_writer_ = writer; }
+
 private:
     std::string channel_;
     std::int32_t stream_id_;
@@ -50,6 +53,7 @@ private:
     core::Source source_;
     std::shared_ptr<AeronClientView> client_;
     std::atomic<bool>& stop_flag_;
+    persist::WireCaptureWriter* capture_writer_{nullptr};
 };
 
 } // namespace ingest

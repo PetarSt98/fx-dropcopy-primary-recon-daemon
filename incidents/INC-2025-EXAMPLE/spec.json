@@ -1,0 +1,20 @@
+{
+  "id": "INC-2025-EXAMPLE",
+  "description": "Example incident for audit regression harness",
+  "wire_inputs": [
+    {
+      "path": "wire/demo_20250101_120000.bin",
+      "from_ns": 1735732800000000000,
+      "to_ns": 1735732803000000000
+    },
+    {
+      "path": "wire/demo_20250101_120300.bin",
+      "from_ns": 1735732980000000000,
+      "to_ns": 1735733000000000000
+    }
+  ],
+  "replay": {
+    "speed": "fast",
+    "max_records": 0
+  }
+}
