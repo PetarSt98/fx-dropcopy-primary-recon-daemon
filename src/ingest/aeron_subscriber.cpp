@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "util/rdtsc.hpp"
+#include "persist/wire_log_format.hpp"
 
 namespace ingest {
 
@@ -62,13 +63,14 @@ void AeronSubscriber::run() {
             const auto* ptr = reinterpret_cast<const std::byte*>(buffer.buffer() + offset);
             capture_writer_->try_submit(std::span<const std::byte>(ptr, static_cast<std::size_t>(length)));
         }
-        if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
+        if (length != static_cast<aeron::util::index_t>(persist::wire_exec_event_wire_size)) {
             ++stats_.parse_failures;
             return;
         }
 
-        const auto* wire = reinterpret_cast<const core::WireExecEvent*>(buffer.buffer() + offset);
-        const core::ExecEvent evt = core::from_wire(*wire, source_, ::util::rdtsc());
+        core::WireExecEvent wire{};
+        persist::deserialize_wire_exec_event(wire, reinterpret_cast<const std::uint8_t*>(buffer.buffer() + offset));
+        const core::ExecEvent evt = core::from_wire(wire, source_, ::util::rdtsc());
         if (!ring_.try_push(evt)) {
             ++stats_.drops;
         } else {

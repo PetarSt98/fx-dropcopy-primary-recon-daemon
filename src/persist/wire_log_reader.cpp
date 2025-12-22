@@ -27,7 +27,7 @@ bool WireLogReader::prepare_files() {
     } else if (!opts_.directory.empty()) {
         files_ = scan_wire_logs(opts_.directory, opts_.filename_prefix);
     }
-    std::sort(files_.begin(), files_.end());
+    sort_wire_logs(files_, opts_.filename_prefix);
     file_index_ = 0;
     return !files_.empty();
 }
@@ -72,8 +72,15 @@ bool WireLogReader::open_current_file() {
             ++file_index_;
             continue;
         }
+        WireLogHeaderFields header{};
+        if (!parse_header(std::span<const std::byte>(buffer_.data(), buffer_.size()), header)) {
+            ++stats_.header_invalid;
+            ++file_index_;
+            close_file();
+            continue;
+        }
         current_size_ = buffer_.size();
-        offset_ = 0;
+        offset_ = header.header_size;
         have_current_ = true;
         ++stats_.files_opened;
         stats_.bytes_read += current_size_;
@@ -135,23 +142,31 @@ WireLogReadResult WireLogReader::next(core::WireExecEvent& out, std::uint64_t& o
             return handle_truncated();
         }
         const std::size_t total_size = framed_size(view.payload_length);
-        offset_ += total_size;
 
-        if (view.payload_length != sizeof(core::WireExecEvent)) {
+        if (view.payload_length == 0 || view.payload_length > wire_log_max_payload_size) {
             ++stats_.bad_length;
             ++stats_.records_corrupt;
-            continue;
+            offset_ += total_size;
+            return {WireLogReadStatus::InvalidLength};
         }
+        if (view.payload_length != wire_exec_event_wire_size) {
+            ++stats_.bad_length;
+            ++stats_.records_corrupt;
+            offset_ += total_size;
+            return {WireLogReadStatus::InvalidLength};
+        }
+        offset_ += total_size;
         if (!validate_record(view)) {
             ++stats_.checksum_failures;
             ++stats_.records_corrupt;
             return {WireLogReadStatus::ChecksumMismatch};
         }
 
-        std::memcpy(&out, view.payload.data(), sizeof(core::WireExecEvent));
-        out_capture_ts = out.sending_time;
+        deserialize_wire_exec_event(out, reinterpret_cast<const std::uint8_t*>(view.payload.data()));
+        const auto filter_ts = view.capture_ts;
+        out_capture_ts = view.capture_ts;
 
-        if (!passes_time_window(out_capture_ts)) {
+        if (!passes_time_window(filter_ts)) {
             ++stats_.filtered_out;
             continue;
         }
