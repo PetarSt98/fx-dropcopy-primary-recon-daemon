@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     aeron::Context context;
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, &audit_counters);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring, &audit_counters, &stop_flag);
 
     persist::WireCaptureConfig capture_cfg;
     persist::WireCaptureWriter capture_writer(std::move(capture_cfg));

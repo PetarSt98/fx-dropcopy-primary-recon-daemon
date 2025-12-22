@@ -34,17 +34,10 @@ bool should_log(std::chrono::steady_clock::time_point now,
     return false;
 }
 
-std::string format_filename(std::chrono::system_clock::time_point tp, std::uint64_t seq) {
-    std::time_t t = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
+std::string format_filename(std::uint64_t seq) {
     std::ostringstream oss;
     oss << audit_filename_prefix();
-    oss << std::put_time(&tm, "%Y%m%d_%H%M%S") << "_seq" << std::setw(3) << std::setfill('0') << seq << ".bin";
+    oss << "seq" << std::setw(6) << std::setfill('0') << seq << ".bin";
     return oss.str();
 }
 
@@ -150,7 +143,6 @@ void AuditLogWriter::run() {
 }
 
 bool AuditLogWriter::open_new_file(std::chrono::steady_clock::time_point now) {
-    const auto sys_now = std::chrono::system_clock::now();
     std::error_code ec;
     std::filesystem::create_directories(cfg_.output_dir, ec);
     if (ec) {
@@ -161,7 +153,7 @@ bool AuditLogWriter::open_new_file(std::chrono::steady_clock::time_point now) {
         }
         return false;
     }
-    current_path_ = cfg_.output_dir / format_filename(sys_now, file_seq_++);
+    current_path_ = cfg_.output_dir / format_filename(file_seq_++);
     auto res = sink_->open(current_path_.string());
     if (!res.ok) {
         const auto now = std::chrono::steady_clock::now();

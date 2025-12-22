@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iterator>
 #include <array>
+#include <algorithm>
 
 #include "api/replay.hpp"
 #include "core/exec_event.hpp"
@@ -96,6 +97,26 @@ std::vector<persist::DecodedRecord> parse_audit_dir(const std::filesystem::path&
     return out;
 }
 
+void flip_first_byte(const std::filesystem::path& dir) {
+    std::vector<std::filesystem::path> files;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec); !ec && it != std::filesystem::directory_iterator(); ++it) {
+        if (it->is_regular_file(ec) && !ec) {
+            files.push_back(it->path());
+        }
+    }
+    ASSERT_FALSE(files.empty());
+    std::sort(files.begin(), files.end());
+    std::fstream f(files.front(), std::ios::in | std::ios::out | std::ios::binary);
+    ASSERT_TRUE(f.is_open());
+    char byte = 0;
+    f.read(&byte, 1);
+    byte = static_cast<char>(byte ^ 0xFF);
+    f.seekp(0);
+    f.write(&byte, 1);
+    f.flush();
+}
+
 } // namespace
 
 TEST(ReplayIntegration, DeterministicReplayAndVerify) {
@@ -104,17 +125,32 @@ TEST(ReplayIntegration, DeterministicReplayAndVerify) {
     {
         std::ofstream out(log_path, std::ios::binary | std::ios::trunc);
         write_header(out);
-        // Primary (session_id even) gap between seq 1 and 3 to trigger gap detection.
-        write_record(out, make_wire(1, 1'000, 0, static_cast<std::uint8_t>(core::OrdStatus::New),
-                                    static_cast<std::uint8_t>(core::ExecType::New), "OID1"),
-                     1'100);
-        write_record(out, make_wire(3, 2'000, 0, static_cast<std::uint8_t>(core::OrdStatus::Working),
-                                    static_cast<std::uint8_t>(core::ExecType::PartialFill), "OID1"),
-                     2'100);
-        // Dropcopy (session_id odd) filled to trigger divergence vs primary state.
-        write_record(out, make_wire(1, 3'000, 1, static_cast<std::uint8_t>(core::OrdStatus::Filled),
-                                    static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 100, 100),
-                     3'100);
+        // 99 primary records with a known gap at seq=50 plus one dropcopy record to trigger divergence.
+        std::size_t written = 0;
+        for (std::uint64_t seq = 1; seq <= 100; ++seq) {
+            if (seq == 50) {
+                continue; // intentional gap
+            }
+            const auto ts = 1'000 + seq * 1'000;
+            const auto oid = "OID" + std::to_string(seq % 5);
+            const auto ord_status = (seq % 2 == 0) ? core::OrdStatus::Working : core::OrdStatus::New;
+            const auto exec_type = (seq % 3 == 0) ? core::ExecType::PartialFill : core::ExecType::New;
+            const auto qty = (seq % 4 == 0) ? 10 : 0;
+            const auto cum = (seq % 6 == 0) ? static_cast<std::int64_t>(seq) : qty;
+            write_record(out, make_wire(seq, ts, 0,
+                                        static_cast<std::uint8_t>(ord_status),
+                                        static_cast<std::uint8_t>(exec_type),
+                                        oid,
+                                        qty,
+                                        cum),
+                         ts + 100);
+            ++written;
+        }
+        ASSERT_EQ(written, 99u);
+        write_record(out, make_wire(1, 200'000, 1, static_cast<std::uint8_t>(core::OrdStatus::Filled),
+                                    static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 500, 500),
+                     200'100);
+        ASSERT_EQ(written + 1, 100u);
     }
 
     const auto out1 = tmp_root / "out1";
@@ -146,4 +182,37 @@ TEST(ReplayIntegration, DeterministicReplayAndVerify) {
 
     const int rc2 = api::run_replay(cfg_verify);
     EXPECT_EQ(rc2, 0);
+
+    // Time-window replay should exclude the dropcopy divergence and still process gaps deterministically.
+    const auto out_window = tmp_root / "out_window";
+    api::ReplayConfig cfg_window = cfg;
+    cfg_window.output_dir = out_window;
+    cfg_window.use_time_window = true;
+    cfg_window.window_start_ns = 20'000;
+    cfg_window.window_end_ns = 80'000;
+    const int rc_window = api::run_replay(cfg_window);
+    ASSERT_EQ(rc_window, 0);
+    const auto window_records = parse_audit_dir(out_window);
+    ASSERT_FALSE(window_records.empty());
+    EXPECT_LT(window_records.size(), records.size());
+
+    // Intentional mismatch should surface via --verify-against with exit code 2.
+    const auto golden_mutated = tmp_root / "out_golden_mutated";
+    std::filesystem::create_directories(golden_mutated);
+    for (const auto& entry : std::filesystem::directory_iterator(out1)) {
+        if (entry.is_regular_file()) {
+            std::error_code copy_ec;
+            std::filesystem::copy_file(entry.path(), golden_mutated / entry.path().filename(),
+                                       std::filesystem::copy_options::overwrite_existing, copy_ec);
+            ASSERT_FALSE(copy_ec) << copy_ec.message();
+        }
+    }
+    flip_first_byte(golden_mutated);
+
+    const auto out_bad = tmp_root / "out_bad";
+    api::ReplayConfig cfg_bad = cfg;
+    cfg_bad.output_dir = out_bad;
+    cfg_bad.verify_against = golden_mutated;
+    const int rc_bad = api::run_replay(cfg_bad);
+    EXPECT_EQ(rc_bad, 2);
 }

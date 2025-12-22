@@ -15,7 +15,8 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        ReconCounters& counters,
                        DivergenceRing& divergence_ring,
                        SequenceGapRing& seq_gap_ring,
-                       persist::AuditLogCounters* audit_counters) noexcept
+                       persist::AuditLogCounters* audit_counters,
+                       std::atomic<bool>* producer_done) noexcept
     : stop_flag_(stop_flag),
       primary_(primary),
       dropcopy_(dropcopy),
@@ -23,7 +24,8 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
       counters_(counters),
       divergence_ring_(divergence_ring),
       seq_gap_ring_(seq_gap_ring),
-      audit_counters_(audit_counters) {}
+      audit_counters_(audit_counters),
+      producer_done_(producer_done) {}
 
 void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
     switch (type) {
@@ -48,7 +50,7 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
     SequenceGapEvent gap_ev{};
     SequenceGapEvent* gap_ptr = &gap_ev;
-    const std::uint64_t now_ts = ev.ingest_tsc;
+    const std::uint64_t now_ts = ev.ingest_timestamp_ns;
 
     bool has_gap = false;
     if (ev.source == Source::Primary) {
@@ -139,7 +141,7 @@ void Reconciler::run() {
     ExecEvent primary_evt{};
     ExecEvent dropcopy_evt{};
     std::uint32_t backoff = 0;
-    while (!stop_flag_.load(std::memory_order_acquire)) {
+    while (true) {
         bool consumed = false;
         if (primary_.try_pop(primary_evt)) {
             process_event(primary_evt);
@@ -158,6 +160,13 @@ void Reconciler::run() {
             }
         } else {
             backoff = 0;
+        }
+
+        const bool stop_requested = stop_flag_.load(std::memory_order_acquire);
+        const bool producer_done = producer_done_ ? producer_done_->load(std::memory_order_acquire) : stop_requested;
+        if (stop_requested && producer_done &&
+            primary_.size_approx() == 0 && dropcopy_.size_approx() == 0) {
+            break;
         }
     }
 }

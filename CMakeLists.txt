@@ -4,6 +4,7 @@ project(fx_dropcopy_recon CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(FX_ENABLE_AERON "Build Aeron-dependent components" ON)
 
 if(MSVC)
   add_compile_options(/W4 /permissive-)
@@ -58,6 +59,7 @@ add_library(fx_core
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+if(FX_ENABLE_AERON)
 # Try config-based discovery first; fall back to manual lookup if Aeron does not
 # ship a CMake package config in the current environment (e.g., custom install
 # from source).
@@ -182,32 +184,34 @@ if(NOT aeron_FOUND)
     INTERFACE_INCLUDE_DIRECTORIES "${AERON_INCLUDE_DIRS}"
   )
 endif()
+endif()
 
 add_executable(fx_ingest_demo src/api/demo_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(fx_ingest_demo PRIVATE fx_core)
 
-add_executable(fx_exec_recond
-    src/api/recond_main.cpp
-    src/ingest/aeron_subscriber.cpp
-    src/core/reconciler.cpp
-)
-target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
+if(FX_ENABLE_AERON)
+  add_executable(fx_exec_recond
+      src/api/recond_main.cpp
+      src/ingest/aeron_subscriber.cpp
+      src/core/reconciler.cpp
+  )
+  target_link_libraries(fx_exec_recond PRIVATE fx_core aeron::aeron_client)
 
-add_executable(fx_aeron_publisher
-    src/api/aeron_publisher.cpp
-)
-target_link_libraries(fx_aeron_publisher PRIVATE fx_core aeron::aeron_client)
+  add_executable(fx_aeron_publisher
+      src/api/aeron_publisher.cpp
+  )
+  target_link_libraries(fx_aeron_publisher PRIVATE fx_core aeron::aeron_client)
+endif()
 
 add_executable(fx_replay_main
     src/api/replay_main.cpp
 )
 target_link_libraries(fx_replay_main PRIVATE fx_core)
 
-add_executable(unit_tests_gtest
+set(TEST_SOURCES
     tests/ring_tests.cpp
     tests/fix_parser_tests.cpp
     tests/from_wire_tests.cpp
-    tests/aeron_subscriber_tests.cpp
     tests/arena_tests.cpp
     tests/order_state_tests.cpp
     tests/order_lifecycle_tests.cpp
@@ -224,25 +228,38 @@ add_executable(unit_tests_gtest
     tests/audit_log_integration_tests.cpp
     tests/replay_integration_tests.cpp
 )
-target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
+if(FX_ENABLE_AERON)
+  list(APPEND TEST_SOURCES tests/aeron_subscriber_tests.cpp)
+endif()
+
+add_executable(unit_tests_gtest ${TEST_SOURCES})
+if(FX_ENABLE_AERON)
+  target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
+endif()
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(unit_tests_gtest PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+if(FX_ENABLE_AERON)
+  target_link_libraries(unit_tests_gtest PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+else()
+  target_link_libraries(unit_tests_gtest PRIVATE fx_core GTest::gtest_main)
+endif()
 
 gtest_discover_tests(unit_tests_gtest
   TEST_PREFIX unit_
   DISCOVERY_MODE PRE_TEST
 )
 
-add_executable(integration_aeron_flow
-    tests/integration/aeron_flow_test.cpp
-    src/ingest/aeron_subscriber.cpp
-)
-target_link_libraries(integration_aeron_flow PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+if(FX_ENABLE_AERON)
+  add_executable(integration_aeron_flow
+      tests/integration/aeron_flow_test.cpp
+      src/ingest/aeron_subscriber.cpp
+  )
+  target_link_libraries(integration_aeron_flow PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
 
-gtest_discover_tests(integration_aeron_flow
-  TEST_PREFIX integration_aeron_flow_
-  DISCOVERY_MODE PRE_TEST
-)
+  gtest_discover_tests(integration_aeron_flow
+    TEST_PREFIX integration_aeron_flow_
+    DISCOVERY_MODE PRE_TEST
+  )
+endif()
 
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)

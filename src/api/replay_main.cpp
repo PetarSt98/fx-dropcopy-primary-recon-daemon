@@ -18,7 +18,7 @@ void print_usage(const char* prog) {
               << "  --to-ns <uint64>        Optional inclusive end timestamp (ns)\n"
               << "  --speed <double>        Playback speed multiplier (default 1.0)\n"
               << "  --fast                  Process without sleeping (overrides --speed)\n"
-              << "  --out-dir <path>        Output directory for audit logs (default ./replay_out/<ts>)\n"
+              << "  --out-dir <path>        Output directory for audit logs (default ./replay_out)\n"
               << "  --verify-against <dir>  Compare outputs against golden directory\n"
               << "  --max-records <N>       Optional cap on records processed\n"
               << "  --quiet                 Suppress non-error logs\n"
@@ -38,19 +38,8 @@ std::vector<std::filesystem::path> split_files(const std::string& s) {
 }
 
 std::filesystem::path default_output_dir() {
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "replay_out/%04d%02d%02d_%02d%02d%02d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec);
-    return std::filesystem::path(buf);
+    // Deterministic default to keep replay outputs stable across runs.
+    return std::filesystem::path("replay_out");
 }
 
 } // namespace

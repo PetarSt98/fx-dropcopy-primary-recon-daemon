@@ -5,10 +5,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,8 +30,18 @@ namespace {
 
 using ExecRing = ingest::SpscRing<core::ExecEvent, 1u << 16>;
 
+struct ReplayLoopStats {
+    std::size_t processed_ok{0};
+    std::size_t read_errors{0};
+    std::size_t corrupt_records{0};
+    std::size_t push_failures{0};
+    std::size_t skipped_due_to_limit{0};
+    std::size_t backward_timestamps{0};
+};
+
 struct ReplayState {
     std::atomic<bool> stop_flag{false};
+    std::atomic<bool> producer_done{false};
     std::unique_ptr<ExecRing> primary_ring;
     std::unique_ptr<ExecRing> dropcopy_ring;
     std::unique_ptr<core::DivergenceRing> divergence_ring;
@@ -51,13 +63,6 @@ bool ensure_output_dir(const std::filesystem::path& p) {
     return !ec;
 }
 
-bool rings_empty(const ReplayState& state) noexcept {
-    if (!state.primary_ring || !state.dropcopy_ring) {
-        return true;
-    }
-    return state.primary_ring->size_approx() == 0 && state.dropcopy_ring->size_approx() == 0;
-}
-
 void log_if(bool enabled, util::LogLevel lvl, const char* fmt, const char* arg0 = nullptr) {
     if (!enabled) {
         return;
@@ -69,25 +74,60 @@ void log_if(bool enabled, util::LogLevel lvl, const char* fmt, const char* arg0 
     }
 }
 
-bool compare_files(const std::filesystem::path& a, const std::filesystem::path& b) {
+struct CompareResult {
+    bool match{false};
+    std::string detail;
+};
+
+CompareResult compare_files_streaming(const std::filesystem::path& a, const std::filesystem::path& b) {
     std::ifstream fa(a, std::ios::binary);
     std::ifstream fb(b, std::ios::binary);
     if (!fa.is_open() || !fb.is_open()) {
-        return false;
+        return {false, "failed to open files"};
     }
-    std::vector<char> ba((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
-    std::vector<char> bb((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
-    return ba == bb;
+    fa.seekg(0, std::ios::end);
+    fb.seekg(0, std::ios::end);
+    const auto size_a = fa.tellg();
+    const auto size_b = fb.tellg();
+    if (size_a != size_b) {
+        std::ostringstream oss;
+        oss << "size mismatch: " << a << " (" << size_a << ") vs " << b << " (" << size_b << ")";
+        return {false, oss.str()};
+    }
+    fa.seekg(0, std::ios::beg);
+    fb.seekg(0, std::ios::beg);
+
+    std::array<char, 4096> buf_a{};
+    std::array<char, 4096> buf_b{};
+    std::size_t offset = 0;
+    while (fa && fb) {
+        fa.read(buf_a.data(), static_cast<std::streamsize>(buf_a.size()));
+        fb.read(buf_b.data(), static_cast<std::streamsize>(buf_b.size()));
+        const auto read_a = static_cast<std::size_t>(fa.gcount());
+        const auto read_b = static_cast<std::size_t>(fb.gcount());
+        const auto chunk = std::min(read_a, read_b);
+        for (std::size_t i = 0; i < chunk; ++i) {
+            if (buf_a[i] != buf_b[i]) {
+                std::ostringstream oss;
+                oss << "mismatch at offset " << (offset + i)
+                    << " lhs=" << static_cast<int>(static_cast<unsigned char>(buf_a[i]))
+                    << " rhs=" << static_cast<int>(static_cast<unsigned char>(buf_b[i]));
+                return {false, oss.str()};
+            }
+        }
+        offset += chunk;
+    }
+    return {true, ""};
 }
 
-bool compare_directories(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+CompareResult compare_directories(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
     if (lhs.empty() || rhs.empty()) {
-        return false;
+        return {false, "empty directory path"};
     }
     std::error_code ec_l;
     std::error_code ec_r;
     if (!std::filesystem::exists(lhs, ec_l) || !std::filesystem::exists(rhs, ec_r)) {
-        return false;
+        return {false, "one or both directories do not exist"};
     }
     std::vector<std::filesystem::path> left_files;
     std::vector<std::filesystem::path> right_files;
@@ -101,19 +141,41 @@ bool compare_directories(const std::filesystem::path& lhs, const std::filesystem
         return ec.value() == 0;
     };
     if (!collect(lhs, left_files) || !collect(rhs, right_files)) {
-        return false;
+        return {false, "failed to enumerate directories"};
     }
-    std::sort(left_files.begin(), left_files.end());
-    std::sort(right_files.begin(), right_files.end());
+    auto normalize = [](const std::filesystem::path& p, const std::filesystem::path& root) {
+        std::error_code ec;
+        const auto rel = std::filesystem::relative(p, root, ec);
+        return (ec ? p.filename() : rel).string();
+    };
+    std::sort(left_files.begin(), left_files.end(), [&](const auto& a, const auto& b) {
+        return normalize(a, lhs) < normalize(b, lhs);
+    });
+    std::sort(right_files.begin(), right_files.end(), [&](const auto& a, const auto& b) {
+        return normalize(a, rhs) < normalize(b, rhs);
+    });
     if (left_files.size() != right_files.size()) {
-        return false;
+        std::ostringstream oss;
+        oss << "file count mismatch: " << left_files.size() << " vs " << right_files.size();
+        return {false, oss.str()};
     }
     for (std::size_t i = 0; i < left_files.size(); ++i) {
-        if (!compare_files(left_files[i], right_files[i])) {
-            return false;
+        const auto left_rel = normalize(left_files[i], lhs);
+        const auto right_rel = normalize(right_files[i], rhs);
+        if (left_rel != right_rel) {
+            std::ostringstream oss;
+            oss << "file ordering mismatch: " << left_rel << " vs " << right_rel;
+            return {false, oss.str()};
+        }
+        auto cmp = compare_files_streaming(left_files[i], right_files[i]);
+        if (!cmp.match) {
+            if (cmp.detail.empty()) {
+                cmp.detail = "files differ";
+            }
+            return cmp;
         }
     }
-    return true;
+    return {true, ""};
 }
 
 } // namespace
@@ -164,7 +226,8 @@ int run_replay(const ReplayConfig& cfg) {
                            state.recon_counters,
                            *state.divergence_ring,
                            *state.gap_ring,
-                           &state.audit_counters);
+                           &state.audit_counters,
+                           &state.producer_done);
 
     persist::AuditLogConfig audit_cfg;
     if (!cfg.output_dir.empty()) {
@@ -180,11 +243,14 @@ int run_replay(const ReplayConfig& cfg) {
     std::thread recon_thread([&] { recon.run(); });
 
     std::uint64_t last_ts{0};
-    std::size_t processed{0};
+    ReplayLoopStats loop_stats{};
+    bool first_record = true;
 
     core::WireExecEvent wire{};
     std::uint64_t capture_ts{0};
     bool success = true;
+
+    constexpr int kMaxPushAttempts = 4096;
 
     while (true) {
         auto res = reader.next(wire, capture_ts);
@@ -192,11 +258,31 @@ int run_replay(const ReplayConfig& cfg) {
             break;
         }
         if (res.status != persist::WireLogReadStatus::Ok) {
-            util::log(util::LogLevel::Error, "Wire log read error status=%d", static_cast<int>(res.status));
-            success = false;
-            break;
+            switch (res.status) {
+            case persist::WireLogReadStatus::ChecksumMismatch:
+            case persist::WireLogReadStatus::InvalidLength:
+            case persist::WireLogReadStatus::Truncated:
+                ++loop_stats.corrupt_records;
+                util::log(util::LogLevel::Warn, "Skipping corrupt wire record status=%d",
+                          static_cast<int>(res.status));
+                continue;
+            case persist::WireLogReadStatus::IoError:
+                ++loop_stats.read_errors;
+                util::log(util::LogLevel::Error, "Wire log IO error");
+                success = false;
+                break;
+            default:
+                ++loop_stats.read_errors;
+                util::log(util::LogLevel::Error, "Unexpected wire log status=%d", static_cast<int>(res.status));
+                success = false;
+                break;
+            }
+            if (!success) {
+                break;
+            }
         }
-        if (cfg.max_records > 0 && processed >= cfg.max_records) {
+        if (cfg.max_records > 0 && loop_stats.processed_ok >= cfg.max_records) {
+            ++loop_stats.skipped_due_to_limit;
             break;
         }
 
@@ -204,20 +290,40 @@ int run_replay(const ReplayConfig& cfg) {
         const core::ExecEvent evt = core::from_wire(wire, src, capture_ts);
         ExecRing& ring = (src == core::Source::Primary) ? *state.primary_ring : *state.dropcopy_ring;
 
-        std::uint32_t backoff = 0;
-        while (!ring.try_push(evt)) {
-            if (backoff < 16) {
-                ++backoff;
+        bool pushed = false;
+        for (int attempt = 0; attempt < kMaxPushAttempts; ++attempt) {
+            if (ring.try_push(evt)) {
+                pushed = true;
+                break;
+            }
+            if (attempt < 32) {
                 std::this_thread::yield();
             } else {
                 std::this_thread::sleep_for(std::chrono::microseconds(50));
             }
         }
+        if (!pushed) {
+            ++loop_stats.push_failures;
+            util::log(util::LogLevel::Error, "Ring backpressure exceeded while pushing event");
+            success = false;
+            break;
+        }
 
-        if (!cfg.fast && processed > 0) {
-            if (capture_ts >= last_ts) {
-                const std::uint64_t delta = capture_ts - last_ts;
-                if (delta > 0) {
+        if (!cfg.fast) {
+            if (first_record) {
+                first_record = false;
+            } else {
+                std::uint64_t delta = 0;
+                if (capture_ts < last_ts) {
+                    ++loop_stats.backward_timestamps;
+                    util::log(util::LogLevel::Warn,
+                              "Capture timestamp moved backwards prev=%llu curr=%llu",
+                              static_cast<unsigned long long>(last_ts),
+                              static_cast<unsigned long long>(capture_ts));
+                } else {
+                    delta = capture_ts - last_ts;
+                }
+                if (delta > 0 && cfg.speed > 0.0) {
                     const double scaled = delta / cfg.speed;
                     const auto sleep_ns = static_cast<std::uint64_t>(scaled);
                     if (sleep_ns > 0) {
@@ -228,13 +334,14 @@ int run_replay(const ReplayConfig& cfg) {
         }
 
         last_ts = capture_ts;
-        ++processed;
+        ++loop_stats.processed_ok;
+        if (cfg.max_records > 0 && loop_stats.processed_ok >= cfg.max_records) {
+            ++loop_stats.skipped_due_to_limit;
+            break;
+        }
     }
 
-    // Allow the reconciler to drain remaining events before stopping.
-    while (!rings_empty(state)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    state.producer_done.store(true, std::memory_order_release);
     state.stop_flag.store(true, std::memory_order_release);
 
     if (recon_thread.joinable()) {
@@ -247,9 +354,12 @@ int run_replay(const ReplayConfig& cfg) {
     }
 
     if (!cfg.verify_against.empty()) {
-        if (!compare_directories(audit_cfg.output_dir, cfg.verify_against)) {
-            util::log(util::LogLevel::Error, "Verification failed: outputs differ from %s",
-                      cfg.verify_against.string().c_str());
+        const auto cmp = compare_directories(audit_cfg.output_dir, cfg.verify_against);
+        if (!cmp.match) {
+            util::log(util::LogLevel::Error,
+                      "Verification failed against %s: %s",
+                      cfg.verify_against.string().c_str(),
+                      cmp.detail.c_str());
             return 2;
         }
     }
@@ -257,9 +367,13 @@ int run_replay(const ReplayConfig& cfg) {
     if (cfg.verbose && !cfg.quiet) {
         const auto& stats = reader.stats();
         util::log(util::LogLevel::Info,
-                  "Replay completed: processed=%zu ok_records=%llu filtered=%llu files=%llu bytes=%llu",
-                  processed,
-                  static_cast<unsigned long long>(stats.records_ok),
+                  "Replay completed: processed=%zu corrupt=%zu read_errors=%zu push_failures=%zu backward_ts=%zu limit_skips=%zu filtered=%llu files=%llu bytes=%llu",
+                  loop_stats.processed_ok,
+                  loop_stats.corrupt_records,
+                  loop_stats.read_errors,
+                  loop_stats.push_failures,
+                  loop_stats.backward_timestamps,
+                  loop_stats.skipped_due_to_limit,
                   static_cast<unsigned long long>(stats.filtered_out),
                   static_cast<unsigned long long>(stats.files_opened),
                   static_cast<unsigned long long>(stats.bytes_read));
