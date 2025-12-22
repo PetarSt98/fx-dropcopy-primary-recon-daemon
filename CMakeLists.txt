@@ -53,6 +53,7 @@ add_library(fx_core
     src/persist/endianness.hpp
     src/persist/audit_log_format.hpp
     src/persist/audit_log_writer.cpp
+    src/api/replay.cpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -197,6 +198,11 @@ add_executable(fx_aeron_publisher
 )
 target_link_libraries(fx_aeron_publisher PRIVATE fx_core aeron::aeron_client)
 
+add_executable(fx_replay_main
+    src/api/replay_main.cpp
+)
+target_link_libraries(fx_replay_main PRIVATE fx_core)
+
 add_executable(unit_tests_gtest
     tests/ring_tests.cpp
     tests/fix_parser_tests.cpp
@@ -216,6 +222,7 @@ add_executable(unit_tests_gtest
     tests/audit_log_format_tests.cpp
     tests/audit_log_writer_tests.cpp
     tests/audit_log_integration_tests.cpp
+    tests/replay_integration_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
