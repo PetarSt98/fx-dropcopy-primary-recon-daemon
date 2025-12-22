@@ -34,7 +34,36 @@ static bool writev_fully(IFileSink& sink,
                          struct iovec* iov,
                          int iovcnt,
                          std::size_t& total_written,
-                         std::atomic<std::uint64_t>& partial_counter);
+                         std::atomic<std::uint64_t>& partial_counter) {
+    total_written = 0;
+    int idx = 0;
+    while (idx < iovcnt) {
+        std::size_t bytes_written = 0;
+        IoResult r = sink.writev(&iov[idx], iovcnt - idx, bytes_written);
+        if (!r.ok) {
+            if (r.error_code == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        total_written += bytes_written;
+        std::size_t advance = bytes_written;
+        while (advance > 0 && idx < iovcnt) {
+            if (advance < iov[idx].iov_len) {
+                iov[idx].iov_base = static_cast<char*>(iov[idx].iov_base) + advance;
+                iov[idx].iov_len -= advance;
+                advance = 0;
+            } else {
+                advance -= iov[idx].iov_len;
+                ++idx;
+            }
+        }
+        if (idx < iovcnt && bytes_written > 0) {
+            partial_counter.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return true;
+}
 
 } // namespace
 
