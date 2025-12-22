@@ -30,6 +30,12 @@ struct RecordBuffers {
     RecordFields fields{};
 };
 
+static bool writev_fully(IFileSink& sink,
+                         struct iovec* iov,
+                         int iovcnt,
+                         std::size_t& total_written,
+                         std::atomic<std::uint64_t>& partial_counter);
+
 } // namespace
 
 WireCaptureWriter::WireCaptureWriter(WireCaptureConfig cfg)
