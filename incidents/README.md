@@ -31,26 +31,41 @@ Incident specifications define deterministic replay inputs and expected outputs 
 - `replay.speed`: `"fast"` for unthrottled playback (default), `"realtime"` for paced playback.
 - `replay.max_records`: 0 means no limit.
 
-## Workflow
+## Adding an Incident
 
-1. **Generate golden outputs (run once):**
+1. Create directory: `incidents/<id>/`
+2. Add `incident.json` (see schema above)
+3. Add `baseline_config.json`
+4. Add `candidate_config.json`
+5. Optional: Add `whitelist.json`
 
-   ```bash
-   replay_main --incident incidents/<ID>/spec.json \
-               --config configs/baseline.json \
-               --output incidents/<ID>/golden
-   ```
+## Generating Golden Output
 
-2. **Test a candidate build (repeatable):**
+Use the regression harness to refresh golden outputs from the baseline configuration:
 
-   ```bash
-   replay_main --incident incidents/<ID>/spec.json \
-               --config configs/candidate.json \
-               --output /tmp/candidate
+```bash
+fx_incident_runner --spec incidents/<id>/incident.json --refresh-golden
+```
 
-   audit_diff incidents/<ID>/golden /tmp/candidate \
-              --whitelist incidents/<ID>/whitelist.json
-   ```
+## Running Regression Test
+
+```bash
+fx_incident_runner --spec incidents/<id>/incident.json
+```
+
+## CI Integration
+
+Example loop across all incidents:
+
+```bash
+for incident in incidents/*/incident.json; do
+    fx_incident_runner --spec "$incident" || exit $?
+done
+```
+
+## Whitelist Rules
+
+See `whitelist.json` schema in Part 1 documentation. A whitelist can be supplied explicitly with `--whitelist` or discovered automatically at `incidents/<id>/whitelist.json`.
 
 ## Whitelist (whitelist.json)
 

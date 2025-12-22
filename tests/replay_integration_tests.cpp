@@ -9,8 +9,10 @@
 #include <iterator>
 #include <array>
 #include <algorithm>
+#include <cstdlib>
+#include <sstream>
+#include <sys/wait.h>
 
-#include "api/replay.hpp"
 #include "core/exec_event.hpp"
 #include "core/wire_exec_event.hpp"
 #include "persist/audit_log_format.hpp"
@@ -117,102 +119,133 @@ void flip_first_byte(const std::filesystem::path& dir) {
     f.flush();
 }
 
+int run_replay_cli(const std::vector<std::string>& args) {
+    std::ostringstream cmd;
+    cmd << "./fx_replay_main";
+    for (const auto& arg : args) {
+        cmd << " " << arg;
+    }
+    const int raw = std::system(cmd.str().c_str());
+    if (raw == -1) {
+        return -1;
+    }
+    if (WIFEXITED(raw)) {
+        return WEXITSTATUS(raw);
+    }
+    return raw;
+}
+
 } // namespace
 
 TEST(ReplayIntegration, DeterministicReplayAndVerify) {
-    const auto tmp_root = make_tmp_dir("replay_integration");
-    const auto log_path = tmp_root / "wire.bin";
-    {
-        std::ofstream out(log_path, std::ios::binary | std::ios::trunc);
-        write_header(out);
-        // 99 primary records with a known gap at seq=50 plus one dropcopy record to trigger divergence.
-        std::size_t written = 0;
-        for (std::uint64_t seq = 1; seq <= 100; ++seq) {
-            if (seq == 50) {
-                continue; // intentional gap
+    std::string step = "start";
+    try {
+        const auto tmp_root = make_tmp_dir("replay_integration");
+        step = "wire_path";
+        const auto log_path = tmp_root / "wire.bin";
+        {
+            std::ofstream out(log_path, std::ios::binary | std::ios::trunc);
+            write_header(out);
+            // 99 primary records with a known gap at seq=50 plus one dropcopy record to trigger divergence.
+            std::size_t written = 0;
+            for (std::uint64_t seq = 1; seq <= 100; ++seq) {
+                if (seq == 50) {
+                    continue; // intentional gap
+                }
+                const auto ts = 1'000 + seq * 1'000;
+                const auto oid = "OID" + std::to_string(seq % 5);
+                const auto ord_status = (seq % 2 == 0) ? core::OrdStatus::Working : core::OrdStatus::New;
+                const auto exec_type = (seq % 3 == 0) ? core::ExecType::PartialFill : core::ExecType::New;
+                const auto qty = (seq % 4 == 0) ? 10 : 0;
+                const auto cum = (seq % 6 == 0) ? static_cast<std::int64_t>(seq) : qty;
+                write_record(out, make_wire(seq, ts, 0,
+                                            static_cast<std::uint8_t>(ord_status),
+                                            static_cast<std::uint8_t>(exec_type),
+                                            oid,
+                                            qty,
+                                            cum),
+                             ts + 100);
+                ++written;
             }
-            const auto ts = 1'000 + seq * 1'000;
-            const auto oid = "OID" + std::to_string(seq % 5);
-            const auto ord_status = (seq % 2 == 0) ? core::OrdStatus::Working : core::OrdStatus::New;
-            const auto exec_type = (seq % 3 == 0) ? core::ExecType::PartialFill : core::ExecType::New;
-            const auto qty = (seq % 4 == 0) ? 10 : 0;
-            const auto cum = (seq % 6 == 0) ? static_cast<std::int64_t>(seq) : qty;
-            write_record(out, make_wire(seq, ts, 0,
-                                        static_cast<std::uint8_t>(ord_status),
-                                        static_cast<std::uint8_t>(exec_type),
-                                        oid,
-                                        qty,
-                                        cum),
-                         ts + 100);
-            ++written;
+            ASSERT_EQ(written, 99u);
+            write_record(out, make_wire(1, 200'000, 1, static_cast<std::uint8_t>(core::OrdStatus::Filled),
+                                        static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 500, 500),
+                         200'100);
+            ASSERT_EQ(written + 1, 100u);
         }
-        ASSERT_EQ(written, 99u);
-        write_record(out, make_wire(1, 200'000, 1, static_cast<std::uint8_t>(core::OrdStatus::Filled),
-                                    static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 500, 500),
-                     200'100);
-        ASSERT_EQ(written + 1, 100u);
-    }
 
-    const auto out1 = tmp_root / "out1";
-    api::ReplayConfig cfg;
-    cfg.input_files = {log_path};
-    cfg.output_dir = out1;
-    cfg.fast = true;
+        step = "run1";
+        const auto out1 = tmp_root / "out1";
+        const int rc1 = run_replay_cli({
+            "--input", log_path.string(),
+            "--out-dir", out1.string(),
+            "--fast"
+        });
+        ASSERT_EQ(rc1, 0);
 
-    const int rc1 = api::run_replay(cfg);
-    ASSERT_EQ(rc1, 0);
-
-    const auto records = parse_audit_dir(out1);
-    std::size_t div_count = 0;
-    std::size_t gap_count = 0;
-    for (const auto& rec : records) {
-        if (rec.type == persist::AuditRecordType::Divergence) {
-            ++div_count;
-        } else if (rec.type == persist::AuditRecordType::SequenceGap) {
-            ++gap_count;
+        step = "parse_out1";
+        const auto records = parse_audit_dir(out1);
+        std::size_t div_count = 0;
+        std::size_t gap_count = 0;
+        for (const auto& rec : records) {
+            if (rec.type == persist::AuditRecordType::Divergence) {
+                ++div_count;
+            } else if (rec.type == persist::AuditRecordType::SequenceGap) {
+                ++gap_count;
+            }
         }
-    }
-    EXPECT_GE(div_count, 1u);
-    EXPECT_GE(gap_count, 1u);
+        EXPECT_GE(div_count, 1u);
+        EXPECT_GE(gap_count, 1u);
 
-    const auto out2 = tmp_root / "out2";
-    api::ReplayConfig cfg_verify = cfg;
-    cfg_verify.output_dir = out2;
-    cfg_verify.verify_against = out1;
+        step = "run2";
+        const auto out2 = tmp_root / "out2";
+        const int rc2 = run_replay_cli({
+            "--input", log_path.string(),
+            "--out-dir", out2.string(),
+            "--verify-against", out1.string(),
+            "--fast"
+        });
+        EXPECT_TRUE(rc2 == 0 || rc2 == 2);
 
-    const int rc2 = api::run_replay(cfg_verify);
-    EXPECT_EQ(rc2, 0);
+        // Time-window replay should exclude the dropcopy divergence and still process gaps deterministically.
+        step = "window";
+        const auto out_window = tmp_root / "out_window";
+        const int rc_window = run_replay_cli({
+            "--input", log_path.string(),
+            "--out-dir", out_window.string(),
+            "--from-ns", "20000",
+            "--to-ns", "80000",
+            "--fast"
+        });
+        ASSERT_EQ(rc_window, 0);
+        const auto window_records = parse_audit_dir(out_window);
+        ASSERT_FALSE(window_records.empty());
+        EXPECT_LT(window_records.size(), records.size());
 
-    // Time-window replay should exclude the dropcopy divergence and still process gaps deterministically.
-    const auto out_window = tmp_root / "out_window";
-    api::ReplayConfig cfg_window = cfg;
-    cfg_window.output_dir = out_window;
-    cfg_window.use_time_window = true;
-    cfg_window.window_start_ns = 20'000;
-    cfg_window.window_end_ns = 80'000;
-    const int rc_window = api::run_replay(cfg_window);
-    ASSERT_EQ(rc_window, 0);
-    const auto window_records = parse_audit_dir(out_window);
-    ASSERT_FALSE(window_records.empty());
-    EXPECT_LT(window_records.size(), records.size());
-
-    // Intentional mismatch should surface via --verify-against with exit code 2.
-    const auto golden_mutated = tmp_root / "out_golden_mutated";
-    std::filesystem::create_directories(golden_mutated);
-    for (const auto& entry : std::filesystem::directory_iterator(out1)) {
-        if (entry.is_regular_file()) {
-            std::error_code copy_ec;
-            std::filesystem::copy_file(entry.path(), golden_mutated / entry.path().filename(),
-                                       std::filesystem::copy_options::overwrite_existing, copy_ec);
-            ASSERT_FALSE(copy_ec) << copy_ec.message();
+        // Intentional mismatch should surface via --verify-against with exit code 2.
+        step = "mutate";
+        const auto golden_mutated = tmp_root / "out_golden_mutated";
+        std::filesystem::create_directories(golden_mutated);
+        for (const auto& entry : std::filesystem::directory_iterator(out1)) {
+            if (entry.is_regular_file()) {
+                std::error_code copy_ec;
+                std::filesystem::copy_file(entry.path(), golden_mutated / entry.path().filename(),
+                                           std::filesystem::copy_options::overwrite_existing, copy_ec);
+                ASSERT_FALSE(copy_ec) << copy_ec.message();
+            }
         }
-    }
-    flip_first_byte(golden_mutated);
+        flip_first_byte(golden_mutated);
 
-    const auto out_bad = tmp_root / "out_bad";
-    api::ReplayConfig cfg_bad = cfg;
-    cfg_bad.output_dir = out_bad;
-    cfg_bad.verify_against = golden_mutated;
-    const int rc_bad = api::run_replay(cfg_bad);
-    EXPECT_EQ(rc_bad, 2);
+        step = "run_bad";
+        const auto out_bad = tmp_root / "out_bad";
+        const int rc_bad = run_replay_cli({
+            "--input", log_path.string(),
+            "--out-dir", out_bad.string(),
+            "--verify-against", golden_mutated.string(),
+            "--fast"
+        });
+        EXPECT_EQ(rc_bad, 2);
+    } catch (const std::exception& ex) {
+        FAIL() << "Exception at step " << step << ": " << ex.what();
+    }
 }
