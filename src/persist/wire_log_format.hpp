@@ -58,10 +58,6 @@ inline constexpr std::size_t wire_exec_event_wire_size = 151;
 inline constexpr std::string_view default_filename_prefix() noexcept { return "wire_capture_"; }
 static_assert(wire_exec_event_wire_size == 151, "WireExecEvent on-disk size must remain fixed at 151 bytes");
 
-inline std::uint32_t crc32c_bytes(std::span<const std::byte> payload) noexcept {
-    return util::Crc32c::compute(payload.data(), payload.size());
-}
-
 inline std::uint16_t read_u16_le(const std::uint8_t* p) noexcept {
     return from_le16(static_cast<std::uint16_t>(p[0]) |
                      static_cast<std::uint16_t>(static_cast<std::uint16_t>(p[1]) << 8));

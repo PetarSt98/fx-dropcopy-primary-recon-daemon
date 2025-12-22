@@ -7,7 +7,7 @@
 TEST(WireLogFormat, CrcVector) {
     const char* msg = "123456789";
     std::span<const std::byte> payload(reinterpret_cast<const std::byte*>(msg), 9);
-    const std::uint32_t crc = persist::crc32c_bytes(payload);
+    const std::uint32_t crc = util::Crc32c::compute(payload.data(), payload.size());
     EXPECT_EQ(crc, 0xE3069283u);
 }
 
