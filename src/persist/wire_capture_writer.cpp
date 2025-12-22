@@ -223,8 +223,8 @@ bool WireCaptureWriter::rotate_file() {
     encode_header(header, header_bytes);
     struct iovec header_iov { header_bytes.data(), header_bytes.size() };
     std::size_t header_written = 0;
-    auto header_res = new_sink->writev(&header_iov, 1, header_written);
-    if (!header_res.ok || header_written != header_bytes.size()) {
+    if (!writev_fully(*new_sink, &header_iov, 1, header_written, metrics_.partial_writes) ||
+        header_written != header_bytes.size()) {
         metrics_.io_errors_write.fetch_add(1, std::memory_order_relaxed);
         if (rate_limited_log(last_log_error_)) {
             util::log(util::LogLevel::Error, "WireCaptureWriter failed to write header to %s", path.c_str());
