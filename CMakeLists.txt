@@ -56,7 +56,9 @@ add_library(fx_core
     src/persist/audit_log_writer.cpp
     src/persist/incident_spec.cpp
     src/persist/audit_diff.cpp
+    src/api/replay_engine.cpp
     src/api/replay.cpp
+    src/api/incident_runner_main.cpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -210,6 +212,11 @@ add_executable(fx_replay_main
 )
 target_link_libraries(fx_replay_main PRIVATE fx_core)
 
+add_executable(fx_incident_runner
+    src/api/incident_runner_entry.cpp
+)
+target_link_libraries(fx_incident_runner PRIVATE fx_core)
+
 set(TEST_SOURCES
     tests/ring_tests.cpp
     tests/fix_parser_tests.cpp
@@ -230,6 +237,7 @@ set(TEST_SOURCES
     tests/audit_log_integration_tests.cpp
     tests/replay_integration_tests.cpp
     tests/audit_diff_tests.cpp
+    tests/incident_runner_integration_test.cpp
 )
 if(FX_ENABLE_AERON)
   list(APPEND TEST_SOURCES tests/aeron_subscriber_tests.cpp)
