@@ -13,6 +13,7 @@ namespace persist {
 struct CaptureDescriptor {
     std::uint32_t length{0};
     std::uint32_t slot_index{0};
+    std::uint64_t capture_ts_ns{0};
 };
 
 template <std::size_t CapacityPow2, std::size_t SlotSize>
@@ -29,7 +30,7 @@ public:
     static constexpr std::size_t capacity_static() noexcept { return CapacityPow2; }
     std::size_t slot_size() const noexcept { return SlotSize; }
 
-    bool try_push(const std::byte* payload, std::size_t len) noexcept {
+    bool try_push(const std::byte* payload, std::size_t len, std::uint64_t capture_ts_ns) noexcept {
         if (producer_stop_.load(std::memory_order_relaxed)) {
             return false;
         }
@@ -45,7 +46,10 @@ public:
         const std::size_t slot = tail & mask();
         std::byte* dest = slots_ + slot * SlotSize;
         std::memcpy(dest, payload, len);
-        descriptors_[tail] = CaptureDescriptor{static_cast<std::uint32_t>(len), static_cast<std::uint32_t>(slot)};
+        descriptors_[tail] = CaptureDescriptor{
+            static_cast<std::uint32_t>(len),
+            static_cast<std::uint32_t>(slot),
+            capture_ts_ns};
         tail_.store(next_tail, std::memory_order_release);
         return true;
     }

@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstring>
 #include <iterator>
+#include <array>
 
 #include "api/replay.hpp"
 #include "core/exec_event.hpp"
@@ -49,15 +50,22 @@ core::WireExecEvent make_wire(std::uint64_t seq,
     return evt;
 }
 
-void write_record(std::ofstream& out, const core::WireExecEvent& evt) {
-    const std::span<const std::byte> payload(reinterpret_cast<const std::byte*>(&evt), sizeof(evt));
-    const auto checksum = persist::crc32c(payload);
-    std::uint32_t len_le{0};
-    std::uint32_t crc_le{0};
-    persist::encode_record(payload, checksum, len_le, crc_le);
-    out.write(reinterpret_cast<const char*>(&len_le), sizeof(len_le));
+void write_header(std::ofstream& out) {
+    persist::WireLogHeaderFields header{};
+    std::array<std::byte, persist::wire_log_header_size> bytes{};
+    persist::encode_header(header, bytes);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+void write_record(std::ofstream& out, const core::WireExecEvent& evt, std::uint64_t capture_ts) {
+    std::array<std::byte, persist::wire_exec_event_wire_size> payload{};
+    persist::serialize_wire_exec_event(evt, reinterpret_cast<std::uint8_t*>(payload.data()));
+    persist::RecordFields fields{};
+    persist::encode_record(payload, capture_ts, fields);
+    out.write(reinterpret_cast<const char*>(fields.length_le.data()), static_cast<std::streamsize>(fields.length_le.size()));
+    out.write(reinterpret_cast<const char*>(fields.capture_ts_le.data()), static_cast<std::streamsize>(fields.capture_ts_le.size()));
     out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-    out.write(reinterpret_cast<const char*>(&crc_le), sizeof(crc_le));
+    out.write(reinterpret_cast<const char*>(fields.checksum_le.data()), static_cast<std::streamsize>(fields.checksum_le.size()));
 }
 
 std::vector<persist::DecodedRecord> parse_audit_dir(const std::filesystem::path& dir) {
@@ -95,14 +103,18 @@ TEST(ReplayIntegration, DeterministicReplayAndVerify) {
     const auto log_path = tmp_root / "wire.bin";
     {
         std::ofstream out(log_path, std::ios::binary | std::ios::trunc);
+        write_header(out);
         // Primary (session_id even) gap between seq 1 and 3 to trigger gap detection.
         write_record(out, make_wire(1, 1'000, 0, static_cast<std::uint8_t>(core::OrdStatus::New),
-                                    static_cast<std::uint8_t>(core::ExecType::New), "OID1"));
+                                    static_cast<std::uint8_t>(core::ExecType::New), "OID1"),
+                     1'100);
         write_record(out, make_wire(3, 2'000, 0, static_cast<std::uint8_t>(core::OrdStatus::Working),
-                                    static_cast<std::uint8_t>(core::ExecType::PartialFill), "OID1"));
+                                    static_cast<std::uint8_t>(core::ExecType::PartialFill), "OID1"),
+                     2'100);
         // Dropcopy (session_id odd) filled to trigger divergence vs primary state.
         write_record(out, make_wire(1, 3'000, 1, static_cast<std::uint8_t>(core::OrdStatus::Filled),
-                                    static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 100, 100));
+                                    static_cast<std::uint8_t>(core::ExecType::Fill), "OID1", 100, 100),
+                     3'100);
     }
 
     const auto out1 = tmp_root / "out1";

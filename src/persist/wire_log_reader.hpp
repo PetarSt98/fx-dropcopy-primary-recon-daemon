@@ -15,10 +15,9 @@
 namespace persist {
 
 // Wire log on-disk contract (matches WireCaptureWriter):
-//   record = [u32 payload_len_le][payload bytes][u32 crc32c_le]
-// Payload is a core::WireExecEvent serialized as raw bytes. There is no file
-// header or per-record timestamp in the current writer; the reader surfaces
-// capture_ts from WireExecEvent::sending_time as a deterministic surrogate.
+//   file header (24 bytes) followed by repeated records
+//   record = [u32 payload_len_le][u64 capture_ts_ns_le][payload bytes][u32 crc32c_le]
+// Payload is a serialized core::WireExecEvent (151 bytes).
 
 struct WireLogReaderStats {
     std::uint64_t records_ok{0};
@@ -30,6 +29,7 @@ struct WireLogReaderStats {
     std::uint64_t bad_length{0};
     std::uint64_t io_errors{0};
     std::uint64_t filtered_out{0};
+    std::uint64_t header_invalid{0};
 };
 
 struct WireLogReaderOptions {

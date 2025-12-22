@@ -99,6 +99,11 @@ public:
 std::vector<persist::WireRecordView> parse_records(const std::vector<std::byte>& bytes) {
     std::vector<persist::WireRecordView> out;
     std::size_t offset = 0;
+    persist::WireLogHeaderFields header{};
+    if (!persist::parse_header(bytes, header)) {
+        return out;
+    }
+    offset = header.header_size;
     while (offset + persist::framed_size(0) <= bytes.size()) {
         persist::WireRecordView view;
         if (!persist::parse_record(bytes.data() + offset, bytes.size() - offset, view)) {
@@ -127,8 +132,8 @@ TEST(WireCaptureWriter, HandlesPartialWritesAndEintr) {
     };
     persist::WireCaptureWriter writer(std::move(cfg));
     writer.start();
-    const std::string payload_str = "ABCDE";
-    writer.try_submit(std::span<const std::byte>(reinterpret_cast<const std::byte*>(payload_str.data()), payload_str.size()));
+    std::array<std::byte, persist::wire_exec_event_wire_size> payload{};
+    writer.try_submit(std::span<const std::byte>(payload.data(), payload.size()));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     writer.stop();
     ASSERT_NE(sink_ptr, nullptr);
@@ -143,7 +148,7 @@ TEST(WireCaptureWriter, RotationBySize) {
     auto sys = std::make_unique<FakeSystemClock>();
     std::vector<std::shared_ptr<FakeFileSink>> sinks;
     persist::WireCaptureConfig cfg;
-    cfg.rotate_max_bytes = persist::framed_size(4) + 1; // rotate after each record
+    cfg.rotate_max_bytes = persist::wire_log_header_size + persist::framed_size(persist::wire_exec_event_wire_size) + 1; // rotate after each record
     cfg.steady_clock = std::move(steady);
     cfg.system_clock = std::move(sys);
     cfg.sink_factory = [&sinks]() {
@@ -153,7 +158,7 @@ TEST(WireCaptureWriter, RotationBySize) {
     };
     persist::WireCaptureWriter writer(std::move(cfg));
     writer.start();
-    std::array<std::byte, 4> payload{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+    std::array<std::byte, persist::wire_exec_event_wire_size> payload{};
     writer.try_submit(payload);
     writer.try_submit(payload);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));

@@ -1,6 +1,5 @@
 #include "persist/wire_capture_writer.hpp"
 
-#include <cassert>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -10,6 +9,7 @@
 #include <cerrno>
 #include <thread>
 #include <mutex>
+#include <array>
 
 #ifndef _WIN32
 #include <sys/statvfs.h>
@@ -27,8 +27,7 @@ constexpr std::size_t kRingCapacity = 1024;
 constexpr std::size_t kSlotSize = 16 * 1024;
 
 struct RecordBuffers {
-    std::uint32_t len_le{0};
-    std::uint32_t crc_le{0};
+    RecordFields fields{};
 };
 
 } // namespace
@@ -82,7 +81,8 @@ bool WireCaptureWriter::try_submit(std::span<const std::byte> payload) noexcept 
         metrics_.drops_degraded_mode.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    if (!ring_->try_push(payload.data(), len)) {
+    const auto capture_ts = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(system_clock_->now().time_since_epoch()).count());
+    if (!ring_->try_push(payload.data(), len, capture_ts)) {
         metrics_.drops_queue_full.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -218,10 +218,25 @@ bool WireCaptureWriter::rotate_file() {
         }
         return false;
     }
-    const std::uint64_t new_size = new_sink->current_size();
+    WireLogHeaderFields header{};
+    std::array<std::byte, wire_log_header_size> header_bytes{};
+    encode_header(header, header_bytes);
+    struct iovec header_iov { header_bytes.data(), header_bytes.size() };
+    std::size_t header_written = 0;
+    auto header_res = new_sink->writev(&header_iov, 1, header_written);
+    if (!header_res.ok || header_written != header_bytes.size()) {
+        metrics_.io_errors_write.fetch_add(1, std::memory_order_relaxed);
+        if (rate_limited_log(last_log_error_)) {
+            util::log(util::LogLevel::Error, "WireCaptureWriter failed to write header to %s", path.c_str());
+        }
+        new_sink->close();
+        return false;
+    }
+    const std::uint64_t new_size = header_written;
     auto old_sink = std::move(sink_);
     sink_ = std::move(new_sink);
     current_file_size_ = new_size;
+    metrics_.bytes_written.fetch_add(new_size, std::memory_order_relaxed);
     file_open_time_ = now();
     ++file_sequence_;
     metrics_.files_rotated.fetch_add(1, std::memory_order_relaxed);
@@ -267,7 +282,7 @@ static bool writev_fully(IFileSink& sink,
 }
 
 bool WireCaptureWriter::perform_write_batch() {
-    struct iovec iovecs[3 * 64];
+    struct iovec iovecs[4 * 64];
     RecordBuffers buf[64];
     CaptureDescriptor desc{};
     int iovcnt = 0;
@@ -279,6 +294,11 @@ bool WireCaptureWriter::perform_write_batch() {
            batch_bytes < cfg_.batch_bytes &&
            ring_->try_pop(desc)) {
         const std::size_t payload_len = desc.length;
+        if (payload_len == 0 || payload_len > wire_log_max_payload_size || payload_len != wire_exec_event_wire_size) {
+            metrics_.drops_payload_too_large.fetch_add(1, std::memory_order_relaxed);
+            ++dropped_on_failure;
+            continue;
+        }
         const std::size_t record_size = framed_size(payload_len);
         if (!rotate_if_needed(record_size)) {
             enter_degraded_mode();
@@ -286,12 +306,12 @@ bool WireCaptureWriter::perform_write_batch() {
             continue;
         }
         std::span<const std::byte> payload(ring_->slot_ptr(desc.slot_index), payload_len);
-        const std::uint32_t crc = crc32c(payload);
-        encode_record(payload, crc, buf[records].len_le, buf[records].crc_le);
+        encode_record(payload, desc.capture_ts_ns, buf[records].fields);
 
-        iovecs[iovcnt++] = {&buf[records].len_le, sizeof(std::uint32_t)};
+        iovecs[iovcnt++] = {buf[records].fields.length_le.data(), buf[records].fields.length_le.size()};
+        iovecs[iovcnt++] = {buf[records].fields.capture_ts_le.data(), buf[records].fields.capture_ts_le.size()};
         iovecs[iovcnt++] = {const_cast<std::byte*>(payload.data()), payload.size()};
-        iovecs[iovcnt++] = {&buf[records].crc_le, sizeof(std::uint32_t)};
+        iovecs[iovcnt++] = {buf[records].fields.checksum_le.data(), buf[records].fields.checksum_le.size()};
         batch_bytes += record_size;
         ++records;
     }
