@@ -55,7 +55,8 @@ public:
                ReconCounters& counters,
                DivergenceRing& divergence_ring,
                SequenceGapRing& seq_gap_ring,
-               persist::AuditLogCounters* audit_counters = nullptr) noexcept;
+               persist::AuditLogCounters* audit_counters = nullptr,
+               std::atomic<bool>* producer_done = nullptr) noexcept;
 
     void run();
     void process_event_for_test(const ExecEvent& ev) noexcept { process_event(ev); }
@@ -76,6 +77,7 @@ private:
     DivergenceRing& divergence_ring_;
     SequenceGapRing& seq_gap_ring_;
     persist::AuditLogCounters* audit_counters_;
+    std::atomic<bool>* producer_done_;
 
     SequenceTracker primary_seq_tracker_{};
     SequenceTracker dropcopy_seq_tracker_{};

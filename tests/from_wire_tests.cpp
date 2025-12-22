@@ -43,7 +43,7 @@ TEST(WireExecTest, FromWireRoundtrip) {
     EXPECT_EQ(evt.cum_qty, wire.cum_qty);
     EXPECT_EQ(evt.sending_time, wire.sending_time);
     EXPECT_EQ(evt.transact_time, wire.transact_time);
-    EXPECT_EQ(evt.ingest_tsc, 999);
+    EXPECT_EQ(evt.ingest_timestamp_ns, 999);
 
     ASSERT_EQ(evt.exec_id_len, wire.exec_id_len);
     EXPECT_EQ(std::string_view(evt.exec_id, evt.exec_id_len), std::string_view(exec_id));

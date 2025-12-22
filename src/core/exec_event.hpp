@@ -36,7 +36,7 @@ struct ExecEvent {
     int64_t cum_qty{0};
     uint64_t sending_time{0};
     uint64_t transact_time{0};
-    uint64_t ingest_tsc{0};
+    uint64_t ingest_timestamp_ns{0};
 
     static constexpr std::size_t id_capacity = 32;
     char exec_id[id_capacity]{};
@@ -63,7 +63,7 @@ struct ExecEvent {
     }
 };
 
-inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_tsc) noexcept {
+inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_timestamp_ns) noexcept {
     static_assert(ExecEvent::id_capacity == WireExecEvent::id_capacity,
                   "ExecEvent and WireExecEvent must agree on id capacity");
     ExecEvent evt{};
@@ -77,7 +77,7 @@ inline ExecEvent from_wire(const WireExecEvent& w, Source src, uint64_t ingest_t
     evt.cum_qty = w.cum_qty;
     evt.sending_time = w.sending_time;
     evt.transact_time = w.transact_time;
-    evt.ingest_tsc = ingest_tsc;
+    evt.ingest_timestamp_ns = ingest_timestamp_ns;
 
     const auto exec_len = static_cast<std::size_t>(
         w.exec_id_len > WireExecEvent::id_capacity ? WireExecEvent::id_capacity : w.exec_id_len);
