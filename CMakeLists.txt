@@ -54,6 +54,8 @@ add_library(fx_core
     src/persist/endianness.hpp
     src/persist/audit_log_format.hpp
     src/persist/audit_log_writer.cpp
+    src/persist/incident_spec.cpp
+    src/persist/audit_diff.cpp
     src/api/replay.cpp
 )
 
@@ -227,6 +229,7 @@ set(TEST_SOURCES
     tests/audit_log_writer_tests.cpp
     tests/audit_log_integration_tests.cpp
     tests/replay_integration_tests.cpp
+    tests/audit_diff_tests.cpp
 )
 if(FX_ENABLE_AERON)
   list(APPEND TEST_SOURCES tests/aeron_subscriber_tests.cpp)
