@@ -46,6 +46,9 @@ add_library(fx_core
     src/persist/file_sink.cpp
     src/persist/wire_capture_writer.cpp
     src/persist/wire_log_format.hpp
+    src/persist/wire_log_reader.cpp
+    src/persist/wire_log_reader.hpp
+    src/persist/wire_log_scan.hpp
     src/persist/capture_ring.hpp
     src/persist/endianness.hpp
     src/persist/audit_log_format.hpp
@@ -209,6 +212,7 @@ add_executable(unit_tests_gtest
     tests/reconciler_sequence_tests.cpp
     tests/wire_log_format_tests.cpp
     tests/wire_capture_writer_tests.cpp
+    tests/wire_log_reader_tests.cpp
     tests/audit_log_format_tests.cpp
     tests/audit_log_writer_tests.cpp
     tests/audit_log_integration_tests.cpp

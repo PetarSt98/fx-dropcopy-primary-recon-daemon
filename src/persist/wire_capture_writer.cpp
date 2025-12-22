@@ -286,8 +286,7 @@ bool WireCaptureWriter::perform_write_batch() {
             continue;
         }
         std::span<const std::byte> payload(ring_->slot_ptr(desc.slot_index), payload_len);
-        const std::uint32_t crc = crc32c(payload);
-        encode_record(payload, crc, buf[records].len_le, buf[records].crc_le);
+        encode_record(payload, buf[records].len_le, buf[records].crc_le);
 
         iovecs[iovcnt++] = {&buf[records].len_le, sizeof(std::uint32_t)};
         iovecs[iovcnt++] = {const_cast<std::byte*>(payload.data()), payload.size()};
