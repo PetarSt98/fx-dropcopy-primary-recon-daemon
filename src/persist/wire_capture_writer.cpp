@@ -252,41 +252,6 @@ bool WireCaptureWriter::rotate_file() {
     return true;
 }
 
-static bool writev_fully(IFileSink& sink,
-                         struct iovec* iov,
-                         int iovcnt,
-                         std::size_t& total_written,
-                         std::atomic<std::uint64_t>& partial_counter) {
-    total_written = 0;
-    int idx = 0;
-    while (idx < iovcnt) {
-        std::size_t bytes_written = 0;
-        IoResult r = sink.writev(&iov[idx], iovcnt - idx, bytes_written);
-        if (!r.ok) {
-            if (r.error_code == EINTR) {
-                continue;
-            }
-            return false;
-        }
-        total_written += bytes_written;
-        std::size_t advance = bytes_written;
-        while (advance > 0 && idx < iovcnt) {
-            if (advance < iov[idx].iov_len) {
-                iov[idx].iov_base = static_cast<char*>(iov[idx].iov_base) + advance;
-                iov[idx].iov_len -= advance;
-                advance = 0;
-            } else {
-                advance -= iov[idx].iov_len;
-                ++idx;
-            }
-        }
-        if (idx < iovcnt && bytes_written > 0) {
-            partial_counter.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-    return true;
-}
-
 bool WireCaptureWriter::perform_write_batch() {
     struct iovec iovecs[4 * 64];
     RecordBuffers buf[64];
@@ -352,6 +317,41 @@ bool WireCaptureWriter::perform_write_batch() {
 void WireCaptureWriter::enter_degraded_mode() {
     metrics_.degraded_mode.store(true, std::memory_order_release);
     next_recovery_time_ = now() + cfg_.recovery_initial;
+}
+
+static bool writev_fully(IFileSink& sink,
+                         struct iovec* iov,
+                         int iovcnt,
+                         std::size_t& total_written,
+                         std::atomic<std::uint64_t>& partial_counter) {
+    total_written = 0;
+    int idx = 0;
+    while (idx < iovcnt) {
+        std::size_t bytes_written = 0;
+        IoResult r = sink.writev(&iov[idx], iovcnt - idx, bytes_written);
+        if (!r.ok) {
+            if (r.error_code == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        total_written += bytes_written;
+        std::size_t advance = bytes_written;
+        while (advance > 0 && idx < iovcnt) {
+            if (advance < iov[idx].iov_len) {
+                iov[idx].iov_base = static_cast<char*>(iov[idx].iov_base) + advance;
+                iov[idx].iov_len -= advance;
+                advance = 0;
+            } else {
+                advance -= iov[idx].iov_len;
+                ++idx;
+            }
+        }
+        if (idx < iovcnt && bytes_written > 0) {
+            partial_counter.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return true;
 }
 
 void WireCaptureWriter::recover_if_due() {
