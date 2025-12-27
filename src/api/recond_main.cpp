@@ -13,12 +13,20 @@
 #include "core/order_state_store.hpp"
 #include "ingest/aeron_subscriber.hpp"
 #include "util/arena.hpp"
+#include "util/async_log.hpp"
 
 int main(int argc, char** argv) {
     if (argc < 5) {
         std::cerr << "Usage: " << argv[0]
                   << " <primary_channel> <primary_stream_id> <dropcopy_channel> <dropcopy_stream_id>" << std::endl;
         return 1;
+    }
+
+    util::AsyncLogger::Config hot_cfg{};
+    hot_cfg.capacity_pow2 = 1u << 15;
+    hot_cfg.use_rdtsc = true;
+    if (!init_hot_logger(hot_cfg)) {
+        LOG_SLOW_ERROR("Failed to start async logger for fx_exec_recond");
     }
 
     const std::string primary_channel = argv[1];
@@ -49,6 +57,9 @@ int main(int argc, char** argv) {
     ingest::AeronSubscriber dropcopy_sub(dropcopy_channel, dropcopy_stream, dropcopy_ring, dropcopy_stats,
                                          core::Source::DropCopy, client, stop_flag);
 
+    LOG_SLOW_INFO("Starting fx_exec_recond primary=%s stream=%d dropcopy=%s stream=%d",
+                  primary_channel.c_str(), primary_stream, dropcopy_channel.c_str(), dropcopy_stream);
+
     std::thread primary_thread([&] { primary_sub.run(); });
     std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
     std::thread recon_thread([&] { recon.run(); });
@@ -56,10 +67,11 @@ int main(int argc, char** argv) {
     const char* duration_env = std::getenv("RECOND_RUN_MS");
     if (duration_env) {
         const auto duration_ms = std::chrono::milliseconds{std::strtoul(duration_env, nullptr, 10)};
-        std::cout << "fx_exec_recond running for " << duration_ms.count() << "ms before shutdown." << std::endl;
+        LOG_SLOW_INFO("fx_exec_recond running for %llu ms before shutdown.",
+                      static_cast<unsigned long long>(duration_ms.count()));
         std::this_thread::sleep_for(duration_ms);
     } else {
-        std::cout << "fx_exec_recond running. Press Enter to exit." << std::endl;
+        LOG_SLOW_INFO("fx_exec_recond running. Press Enter to exit.");
         std::cin.get();
     }
     stop_flag.store(true, std::memory_order_release);
@@ -68,14 +80,17 @@ int main(int argc, char** argv) {
     dropcopy_thread.join();
     recon_thread.join();
 
-    std::cout << "Primary produced: " << primary_stats.produced << " drops: " << primary_stats.drops
-              << " parse_failures: " << primary_stats.parse_failures << "\n";
-    std::cout << "DropCopy produced: " << dropcopy_stats.produced << " drops: " << dropcopy_stats.drops
-              << " parse_failures: " << dropcopy_stats.parse_failures << "\n";
-    std::cout << "Reconciler processed internal: " << counters.internal_events
-              << " dropcopy: " << counters.dropcopy_events << "\n";
-    std::cout << "Divergences total: " << counters.divergence_total
-              << " ring_drops: " << counters.divergence_ring_drops << "\n";
+    LOG_SLOW_INFO("Primary produced=%zu drops=%zu parse_failures=%zu", primary_stats.produced, primary_stats.drops,
+                  primary_stats.parse_failures);
+    LOG_SLOW_INFO("DropCopy produced=%zu drops=%zu parse_failures=%zu", dropcopy_stats.produced, dropcopy_stats.drops,
+                  dropcopy_stats.parse_failures);
+    LOG_SLOW_INFO("Reconciler processed internal=%llu dropcopy=%llu divergences=%llu ring_drops=%llu",
+                  static_cast<unsigned long long>(counters.internal_events),
+                  static_cast<unsigned long long>(counters.dropcopy_events),
+                  static_cast<unsigned long long>(counters.divergence_total),
+                  static_cast<unsigned long long>(counters.divergence_ring_drops));
+
+    shutdown_hot_logger();
 
     return 0;
 }
