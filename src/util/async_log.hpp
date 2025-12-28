@@ -5,9 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "util/log.hpp"
 
@@ -55,7 +55,7 @@ public:
 private:
     struct Slot {
         std::atomic<std::uint64_t> sequence{0};
-        LogRecord record;
+        LogRecord record{};
     };
 
     bool try_pop(LogRecord& out) noexcept;
@@ -67,7 +67,8 @@ private:
     std::atomic<std::uint64_t> head_{0};
     std::uint64_t tail_{0};
     std::size_t mask_{0};
-    std::vector<Slot> slots_;
+    std::size_t capacity_{0};
+    std::unique_ptr<Slot[]> slots_{};
 
     std::atomic<bool> stop_{true};
     std::thread consumer_{};

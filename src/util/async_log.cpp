@@ -29,17 +29,19 @@ bool AsyncLogger::start(const Config& cfg) noexcept {
     head_.store(0, std::memory_order_relaxed);
     tail_ = 0;
     mask_ = cfg.capacity_pow2 - 1;
+    capacity_ = cfg.capacity_pow2;
 
-    slots_.clear();
+    std::unique_ptr<Slot[]> new_slots;
     try {
-        slots_.resize(cfg.capacity_pow2);
+        new_slots.reset(new Slot[capacity_]);
     } catch (...) {
         return false;
     }
 
-    for (std::size_t i = 0; i < cfg.capacity_pow2; ++i) {
-        slots_[i].sequence.store(i, std::memory_order_relaxed);
+    for (std::size_t i = 0; i < capacity_; ++i) {
+        new_slots[i].sequence.store(i, std::memory_order_relaxed);
     }
+    slots_ = std::move(new_slots);
 
     if (!cfg.file_path.empty()) {
         sink_ = std::fopen(cfg.file_path.c_str(), "w");

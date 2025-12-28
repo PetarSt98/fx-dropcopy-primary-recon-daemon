@@ -129,9 +129,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         if (!divergence_ring_.try_push(div)) {
             ++counters_.divergence_ring_drops;
             LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
-                        "divergence_ring_drop type=%u cl_ord_id=%llu",
+                        "divergence_ring_drop type=%u key=%llu",
                         static_cast<unsigned>(div.type),
-                        static_cast<unsigned long long>(div.cl_ord_id));
+                        static_cast<unsigned long long>(div.key));
             return;
         }
         ++counters_.divergence_total;

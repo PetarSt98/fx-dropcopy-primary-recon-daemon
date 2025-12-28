@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
                   static_cast<unsigned long long>(counters.divergence_total),
                   static_cast<unsigned long long>(counters.divergence_ring_drops));
 
-    shutdown_hot_logger();
+    util::shutdown_hot_logger();
 
     return 0;
 }
