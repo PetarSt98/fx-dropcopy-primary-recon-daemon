@@ -22,5 +22,6 @@ No existing calls to `util::log` were found in the repository. The only logger d
 
 ## Strategy
 - Hot-path logging uses the new `util::AsyncLogger` (lock-free MPSC ring, drop-on-full) via `LOG_HOT_*` macros that accept literals plus numeric arg slots (no per-call formatting).
+- `LOG_WARM_FMT`/`LOG_HOT_FMT` remain available for rare diagnostics but are not intended for tight loops.
 - Slow-path logging continues to use `util::SyncLogger` (mutex-protected `stderr`) via `LOG_SLOW_*` macros for startup/configuration and summary output.
 - Selected hot-path counters (`Reconciler` divergence/gap drops) now emit async logs; slow-path binaries log lifecycle events via sync logger.

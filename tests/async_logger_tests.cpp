@@ -137,3 +137,10 @@ TEST(AsyncLoggerTests, StableEncoding) {
     EXPECT_NE(line.find("a1=2"), std::string::npos);
 }
 
+TEST(AsyncLoggerTests, ReturnsFalseWhenNotStarted) {
+    AsyncLogger logger;
+    EXPECT_FALSE(logger.try_log(util::LogLevel::Info, "NA", "msg", 3));
+    EXPECT_EQ(logger.written(), 0u);
+    EXPECT_EQ(logger.dropped(), 0u);
+}
+

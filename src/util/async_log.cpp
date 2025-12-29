@@ -99,7 +99,7 @@ bool AsyncLogger::try_log(LogLevel lvl, const char* category, const char* msg, s
 
 bool AsyncLogger::try_log(LogLevel lvl, const char* category, std::size_t category_len, const char* msg, std::size_t len,
                           std::uint64_t arg0, std::uint64_t arg1) noexcept {
-    if (stop_.load(std::memory_order_acquire)) {
+    if (stop_.load(std::memory_order_acquire) || !slots_) {
         return false;
     }
 

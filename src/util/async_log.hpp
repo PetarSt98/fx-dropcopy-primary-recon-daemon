@@ -104,5 +104,7 @@ void shutdown_hot_logger() noexcept;
 #define LOG_HOT_ERROR(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Error, "HOT", (MSG_LIT), (ARG0), (ARG1))
 #define LOG_HOT_FATAL(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Fatal, "HOT", (MSG_LIT), (ARG0), (ARG1))
 
-#define LOG_HOT_FMT(LVL, CAT, FMT, ...) ::util::hot_logger().try_logf((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
+// Formatting is not hot-path safe; reserve for diagnostics or warm paths.
+#define LOG_WARM_FMT(LVL, CAT, FMT, ...) ::util::hot_logger().try_logf((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
+#define LOG_HOT_FMT(LVL, CAT, FMT, ...)  LOG_WARM_FMT((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
 
