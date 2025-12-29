@@ -11,7 +11,7 @@
 #include "ingest/fix_parser.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
-#include "util/log.hpp"
+#include "util/async_log.hpp"
 #include "util/soh.hpp"
 
 // SPSC rings are fixed-size (power of two). On push failure the caller drops and counts the
@@ -60,6 +60,13 @@ void ingest_thread(std::atomic<bool>& stop_flag, Ring& ring, ThreadStats& stats,
 int main() {
     // Thread lifecycle: main sets up structures, launches ingest + reconciler threads, and on
     // shutdown sets stop_flag then joins in deterministic order (ingest before reconciler).
+    util::AsyncLogger::Config hot_cfg{};
+    hot_cfg.capacity_pow2 = 1u << 14;
+    hot_cfg.use_rdtsc = true;
+    if (!init_hot_logger(hot_cfg)) {
+        LOG_SLOW_ERROR("Failed to start async logger for demo");
+    }
+
     std::atomic<bool> stop_flag{false};
     Ring primary_ring;
     Ring dropcopy_ring;
@@ -79,7 +86,7 @@ int main() {
     std::thread dropcopy([&] { ingest_thread(stop_flag, dropcopy_ring, dropcopy_stats, core::Source::DropCopy); });
     std::thread recon_thread([&] { recon.run(); });
 
-    std::cout << "Running demo for 2 seconds..." << std::endl;
+    LOG_SLOW_INFO("Running demo for 2 seconds...");
     std::this_thread::sleep_for(std::chrono::seconds(2));
     stop_flag.store(true, std::memory_order_release);
 
@@ -87,13 +94,16 @@ int main() {
     dropcopy.join();
     recon_thread.join();
 
-    std::cout << "Primary produced: " << primary_stats.produced << " drops: " << primary_stats.drops
-              << " parse_failures: " << primary_stats.parse_failures << "\n";
-    std::cout << "DropCopy produced: " << dropcopy_stats.produced << " drops: " << dropcopy_stats.drops
-              << " parse_failures: " << dropcopy_stats.parse_failures << "\n";
-    std::cout << "Reconciler processed internal: " << counters.internal_events
-              << " dropcopy: " << counters.dropcopy_events << "\n";
-    std::cout << "Divergences total: " << counters.divergence_total
-              << " ring_drops: " << counters.divergence_ring_drops << "\n";
+    LOG_SLOW_INFO("Primary produced=%zu drops=%zu parse_failures=%zu", primary_stats.produced, primary_stats.drops,
+                  primary_stats.parse_failures);
+    LOG_SLOW_INFO("DropCopy produced=%zu drops=%zu parse_failures=%zu", dropcopy_stats.produced, dropcopy_stats.drops,
+                  dropcopy_stats.parse_failures);
+    LOG_SLOW_INFO("Reconciler processed internal=%llu dropcopy=%llu divergences=%llu ring_drops=%llu",
+                  static_cast<unsigned long long>(counters.internal_events),
+                  static_cast<unsigned long long>(counters.dropcopy_events),
+                  static_cast<unsigned long long>(counters.divergence_total),
+                  static_cast<unsigned long long>(counters.divergence_ring_drops));
+
+    util::shutdown_hot_logger();
     return 0;
 }

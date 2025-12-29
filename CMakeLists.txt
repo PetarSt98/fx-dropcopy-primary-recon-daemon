@@ -38,6 +38,8 @@ add_library(fx_core
     src/core/order_state_store.cpp
     src/core/reconciler.cpp
     src/util/rdtsc.hpp
+    src/util/async_log.hpp
+    src/util/async_log.cpp
     src/util/log.hpp
     src/util/soh.hpp
     src/util/arena.hpp
@@ -198,6 +200,7 @@ add_executable(unit_tests_gtest
     tests/reconciler_logic_tests.cpp
     tests/sequence_tracker_tests.cpp
     tests/reconciler_sequence_tests.cpp
+    tests/async_logger_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
