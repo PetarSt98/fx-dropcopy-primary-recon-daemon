@@ -112,8 +112,8 @@ public:
     }
 
     bool try_push(const T& value) noexcept {
-        const std::size_t head = head_.load(std::memory_order_relaxed);
-        const std::size_t tail = tail_.load(std::memory_order_acquire);
+        const std::uint64_t head = head_.load(std::memory_order_relaxed);
+        const std::uint64_t tail = tail_.load(std::memory_order_acquire);
         if (head - tail >= capacity_) {
             return false; // full
         }
@@ -123,8 +123,8 @@ public:
     }
 
     bool try_pop(T& out) noexcept {
-        const std::size_t tail = tail_.load(std::memory_order_relaxed);
-        const std::size_t head = head_.load(std::memory_order_acquire);
+        const std::uint64_t tail = tail_.load(std::memory_order_relaxed);
+        const std::uint64_t head = head_.load(std::memory_order_acquire);
         if (tail == head) {
             return false; // empty
         }
@@ -142,8 +142,8 @@ public:
     std::size_t capacity() const noexcept { return capacity_; }
 
 private:
-    std::atomic<std::size_t> head_{0};
-    std::atomic<std::size_t> tail_{0};
+    alignas(64) std::atomic<std::uint64_t> head_{0};
+    alignas(64) std::atomic<std::uint64_t> tail_{0};
     std::size_t capacity_{0};
     std::size_t mask_{0};
     std::unique_ptr<T[]> buffer_{};
@@ -204,6 +204,7 @@ private:
 
     std::mutex registry_mutex_;
     std::vector<std::unique_ptr<ProducerRing>> rings_;
+    std::vector<ProducerRing*> ring_view_;
 
     std::atomic<std::uint64_t> global_dropped_{0};
 };

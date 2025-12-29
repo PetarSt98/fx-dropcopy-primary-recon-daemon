@@ -67,7 +67,10 @@ void HotLogger::stop() noexcept {
         consumer_.join();
     }
     std::lock_guard<std::mutex> lk(registry_mutex_);
-    rings_.clear();
+    // Keep rings allocated to avoid stale TLS dereferences; logging is disabled via running_.
+    for (auto& r : rings_) {
+        r->active = false;
+    }
     tls_ring = nullptr;
     if (owns_sink_ && sink_) {
         std::fclose(sink_);
@@ -106,6 +109,7 @@ HotLogger::ProducerRing* HotLogger::ensure_ring() noexcept {
     ring->active = true;
     tls_ring = ring.get();
     rings_.push_back(std::move(ring));
+    ring_view_.push_back(tls_ring);
     return tls_ring;
 }
 
@@ -232,22 +236,25 @@ void HotLogger::write_event(const HotEvent& ev) noexcept {
 void HotLogger::consumer_loop() noexcept {
     std::size_t since_flush = 0;
     std::uint32_t idle_spins = 0;
+    std::vector<ProducerRing*> local_rings;
     while (running_.load(std::memory_order_acquire)) {
         bool had = false;
         {
             std::lock_guard<std::mutex> lk(registry_mutex_);
-            for (auto& pr : rings_) {
-                HotEvent ev{};
-                while (pr->ring.try_pop(ev)) {
-                    had = true;
-                    idle_spins = 0;
-                    write_event(ev);
-                    ++since_flush;
-                    if ((config_.flush_on_warn && ev.header.flags != 0) ||
-                        (config_.flush_every > 0 && since_flush >= config_.flush_every)) {
-                        std::fflush(sink_);
-                        since_flush = 0;
-                    }
+            local_rings = ring_view_;
+        }
+        for (auto* pr : local_rings) {
+            if (!pr || !pr->active) continue;
+            HotEvent ev{};
+            while (pr->ring.try_pop(ev)) {
+                had = true;
+                idle_spins = 0;
+                write_event(ev);
+                ++since_flush;
+                if ((config_.flush_on_warn && ev.header.flags != 0) ||
+                    (config_.flush_every > 0 && since_flush >= config_.flush_every)) {
+                    std::fflush(sink_);
+                    since_flush = 0;
                 }
             }
         }
@@ -261,8 +268,12 @@ void HotLogger::consumer_loop() noexcept {
             }
         }
     }
-    std::lock_guard<std::mutex> lk(registry_mutex_);
-    for (auto& pr : rings_) {
+    {
+        std::lock_guard<std::mutex> lk(registry_mutex_);
+        local_rings = ring_view_;
+    }
+    for (auto* pr : local_rings) {
+        if (!pr || !pr->active) continue;
         HotEvent ev{};
         while (pr->ring.try_pop(ev)) {
             write_event(ev);
