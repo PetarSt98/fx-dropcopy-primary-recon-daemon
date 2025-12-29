@@ -21,6 +21,8 @@ struct HotEventHeader {
     std::uint32_t flags{0};
 };
 
+constexpr std::uint32_t HOT_FLAG_FLUSH = 0x1;
+
 enum class HotEventType : std::uint16_t {
     SeqGap = 1,
     Divergence = 2,
@@ -73,6 +75,7 @@ struct HotEvent {
             std::uint32_t pad;
         } latency;
         struct StateAnomaly {
+            std::uint64_t key;
             std::uint32_t state;
             std::uint32_t event;
             std::uint32_t pad0;
@@ -178,6 +181,7 @@ public:
     bool emit_store_overflow(std::uint32_t table, std::uint32_t capacity, std::uint32_t attempted) noexcept;
     bool emit_ring_drop(std::uint32_t ring_id, std::uint32_t reason, std::uint32_t dropped) noexcept;
     bool emit_latency_sample(std::uint32_t tag, std::uint64_t ns) noexcept;
+    bool emit_state_anomaly(std::uint64_t key, std::uint32_t state, std::uint32_t event, std::uint32_t flags = 0) noexcept;
 
     std::uint64_t dropped() const noexcept { return global_dropped_.load(std::memory_order_relaxed); }
 
@@ -186,7 +190,6 @@ private:
         SpscRing<HotEvent> ring{};
         std::atomic<std::uint64_t> dropped{0};
         std::uint32_t tid{0};
-        bool active{false};
     };
 
     ProducerRing* ensure_ring() noexcept;
@@ -219,6 +222,7 @@ void shutdown_hot_logger() noexcept;
 #define HOT_STORE_OVERFLOW(TABLE, CAP, ATTEMPT) ::util::hot_logger().emit_store_overflow((TABLE), (CAP), (ATTEMPT))
 #define HOT_RING_DROP(RING_ID, REASON, DROPPED) ::util::hot_logger().emit_ring_drop((RING_ID), (REASON), (DROPPED))
 #define HOT_LATENCY(TAG, NS) ::util::hot_logger().emit_latency_sample((TAG), (NS))
+#define HOT_STATE_ANOMALY(KEY, STATE, EVENT, FLAGS) ::util::hot_logger().emit_state_anomaly((KEY), (STATE), (EVENT), (FLAGS))
 
 } // namespace util
 

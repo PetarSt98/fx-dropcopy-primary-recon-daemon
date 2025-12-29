@@ -85,8 +85,12 @@ private:
     std::atomic<std::uint64_t> written_{0};
 };
 
+AsyncLogger& warm_logger() noexcept;
+bool init_warm_logger(const AsyncLogger::Config& cfg) noexcept;
+void shutdown_warm_logger() noexcept;
+
 } // namespace util
 
-// Formatting is not hot-path safe; reserve for diagnostics or warm paths.
-#define LOG_WARM_FMT(LVL, CAT, FMT, ...) ::util::hot_logger().try_logf((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
+// Formatting is not hot-path safe; reserve for diagnostics or warm paths via the AsyncLogger.
+#define LOG_WARM_FMT(LVL, CAT, FMT, ...) ::util::warm_logger().try_logf((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
 

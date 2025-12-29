@@ -8,7 +8,7 @@
 
 namespace util {
 namespace {
-AsyncLogger* global_hot_logger() {
+AsyncLogger* global_async_logger() {
     static AsyncLogger logger;
     return &logger;
 }
@@ -212,6 +212,12 @@ void AsyncLogger::consumer_loop() noexcept {
         std::fflush(sink_);
     }
 }
+
+AsyncLogger& warm_logger() noexcept { return *global_async_logger(); }
+
+bool init_warm_logger(const AsyncLogger::Config& cfg) noexcept { return warm_logger().start(cfg); }
+
+void shutdown_warm_logger() noexcept { warm_logger().stop(); }
 
 } // namespace util
 

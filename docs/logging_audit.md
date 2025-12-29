@@ -17,7 +17,8 @@ No legacy `util::log` call sites existed before the async/hot split. Logging ent
 
 ## Logger routing
 - **Hot channel:** `util::HotLogger` (per-thread SPSC rings, drop-new on full). Structured events with no producer-side formatting. Macros in `util/hot_log.hpp` (e.g., `HOT_SEQ_GAP`, `HOT_RING_DROP`, `HOT_STORE_OVERFLOW`) write fixed payloads; consumer formats text.
-- **Warm channel:** `util::AsyncLogger` remains for occasional formatted diagnostics via `LOG_WARM_FMT`; not for tight loops.
+- **Warm channel:** `util::AsyncLogger` remains for occasional formatted diagnostics via `LOG_WARM_FMT` (through `warm_logger()`);
+  not for tight loops.
 - **Slow channel:** `util::SyncLogger` via `LOG_SLOW_*` macros for lifecycle and configuration paths.
 
 ## Call-site actions
@@ -30,4 +31,4 @@ No legacy `util::log` call sites existed before the async/hot split. Logging ent
 ## Event guidance
 - Hot events focus on: sequence gaps, divergence detection, store/ring overflow, checksum/hash mismatches, latency samples, state anomalies, transport up/down, periodic metrics snapshots.
 - Producer-side work: fill numeric fields only; no strings/formatting/heap. Consumer thread renders human-readable lines.
-- Overflow policy: per-ring and global drop counters increment on full; producers never block. Monitor `HotLogger::dropped()` on a slow path to surface sustained loss.
+- Overflow policy: per-ring and global drop counters increment on full; producers never block. Monitor `HotLogger::dropped()` on a slow path to surface sustained loss. Set `HOT_FLAG_FLUSH` in event flags when a producer wants the consumer to flush immediately.

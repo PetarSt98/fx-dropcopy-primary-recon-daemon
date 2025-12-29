@@ -68,10 +68,6 @@ void HotLogger::stop() noexcept {
     }
     std::lock_guard<std::mutex> lk(registry_mutex_);
     // Keep rings allocated to avoid stale TLS dereferences; logging is disabled via running_.
-    for (auto& r : rings_) {
-        r->active = false;
-    }
-    tls_ring = nullptr;
     if (owns_sink_ && sink_) {
         std::fclose(sink_);
     }
@@ -91,7 +87,7 @@ HotLogger::ProducerRing* HotLogger::ensure_ring() noexcept {
     if (!running_.load(std::memory_order_acquire)) {
         return nullptr;
     }
-    if (tls_ring && tls_ring->active) {
+    if (tls_ring) {
         return tls_ring;
     }
     std::lock_guard<std::mutex> lk(registry_mutex_);
@@ -106,7 +102,6 @@ HotLogger::ProducerRing* HotLogger::ensure_ring() noexcept {
         return nullptr;
     }
     ring->tid = next_tid_.fetch_add(1, std::memory_order_relaxed);
-    ring->active = true;
     tls_ring = ring.get();
     rings_.push_back(std::move(ring));
     ring_view_.push_back(tls_ring);
@@ -155,6 +150,7 @@ bool HotLogger::emit_divergence(std::uint64_t order_key, std::int64_t expected_p
 bool HotLogger::emit_store_overflow(std::uint32_t table, std::uint32_t capacity, std::uint32_t attempted) noexcept {
     HotEvent ev{};
     ev.header.type = static_cast<std::uint16_t>(HotEventType::StoreOverflow);
+    ev.header.flags = HOT_FLAG_FLUSH;
     ev.payload.store_overflow.table = table;
     ev.payload.store_overflow.capacity = capacity;
     ev.payload.store_overflow.attempted = attempted;
@@ -164,6 +160,7 @@ bool HotLogger::emit_store_overflow(std::uint32_t table, std::uint32_t capacity,
 bool HotLogger::emit_ring_drop(std::uint32_t ring_id, std::uint32_t reason, std::uint32_t dropped) noexcept {
     HotEvent ev{};
     ev.header.type = static_cast<std::uint16_t>(HotEventType::RingDrop);
+    ev.header.flags = HOT_FLAG_FLUSH;
     ev.payload.ring_drop.ring_id = ring_id;
     ev.payload.ring_drop.reason = reason;
     ev.payload.ring_drop.dropped = dropped;
@@ -175,6 +172,16 @@ bool HotLogger::emit_latency_sample(std::uint32_t tag, std::uint64_t ns) noexcep
     ev.header.type = static_cast<std::uint16_t>(HotEventType::LatencySample);
     ev.payload.latency.tag = tag;
     ev.payload.latency.sample_ns = ns;
+    return emit(ev);
+}
+
+bool HotLogger::emit_state_anomaly(std::uint64_t key, std::uint32_t state, std::uint32_t event, std::uint32_t flags) noexcept {
+    HotEvent ev{};
+    ev.header.type = static_cast<std::uint16_t>(HotEventType::StateAnomaly);
+    ev.header.flags = flags;
+    ev.payload.state_anomaly.key = key;
+    ev.payload.state_anomaly.state = state;
+    ev.payload.state_anomaly.event = event;
     return emit(ev);
 }
 
@@ -216,8 +223,9 @@ void HotLogger::write_event(const HotEvent& ev) noexcept {
                      static_cast<unsigned long long>(ev.payload.latency.sample_ns));
         break;
     case HotEventType::StateAnomaly:
-        std::fprintf(sink, "[HOT][STATE_ANOM][tid=%u][state=%u event=%u]\n", ev.header.tid,
-                     ev.payload.state_anomaly.state, ev.payload.state_anomaly.event);
+        std::fprintf(sink, "[HOT][STATE_ANOM][tid=%u][key=%llu state=%u event=%u]\n", ev.header.tid,
+                     static_cast<unsigned long long>(ev.payload.state_anomaly.key), ev.payload.state_anomaly.state,
+                     ev.payload.state_anomaly.event);
         break;
     case HotEventType::Transport:
         std::fprintf(sink, "[HOT][TRANSPORT][tid=%u][link=%u code=%u]\n", ev.header.tid, ev.payload.transport.link,
@@ -237,6 +245,7 @@ void HotLogger::consumer_loop() noexcept {
     std::size_t since_flush = 0;
     std::uint32_t idle_spins = 0;
     std::vector<ProducerRing*> local_rings;
+    local_rings.reserve(config_.max_rings);
     while (running_.load(std::memory_order_acquire)) {
         bool had = false;
         {
@@ -244,14 +253,14 @@ void HotLogger::consumer_loop() noexcept {
             local_rings = ring_view_;
         }
         for (auto* pr : local_rings) {
-            if (!pr || !pr->active) continue;
+            if (!pr) continue;
             HotEvent ev{};
             while (pr->ring.try_pop(ev)) {
                 had = true;
                 idle_spins = 0;
                 write_event(ev);
                 ++since_flush;
-                if ((config_.flush_on_warn && ev.header.flags != 0) ||
+                if ((config_.flush_on_warn && (ev.header.flags & HOT_FLAG_FLUSH) != 0) ||
                     (config_.flush_every > 0 && since_flush >= config_.flush_every)) {
                     std::fflush(sink_);
                     since_flush = 0;
@@ -273,7 +282,7 @@ void HotLogger::consumer_loop() noexcept {
         local_rings = ring_view_;
     }
     for (auto* pr : local_rings) {
-        if (!pr || !pr->active) continue;
+        if (!pr) continue;
         HotEvent ev{};
         while (pr->ring.try_pop(ev)) {
             write_event(ev);
