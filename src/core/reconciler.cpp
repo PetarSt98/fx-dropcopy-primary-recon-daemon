@@ -5,7 +5,7 @@
 
 #include "core/order_state.hpp"
 #include "core/order_lifecycle.hpp"
-#include "util/async_log.hpp"
+#include "util/hot_log.hpp"
 
 namespace core {
 
@@ -80,18 +80,16 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
         if (!seq_gap_ring_.try_push(gap_ev)) {
             ++counters_.sequence_gap_ring_drops;
-            LOG_HOT_LITERAL(::util::LogLevel::Warn, "RECON", "seq_gap_ring_drop",
-                            static_cast<unsigned long long>(gap_ev.expected_seq),
-                            static_cast<unsigned long long>(gap_ev.seen_seq));
+            HOT_RING_DROP(1u, static_cast<std::uint32_t>(gap_ev.kind), 1u);
         }
     }
 
     OrderState* st = store_.upsert(ev);
     if (!st) {
         ++counters_.store_overflow;
-        LOG_HOT_LITERAL(::util::LogLevel::Warn, "RECON", "store_overflow",
-                        static_cast<unsigned long long>(ev.source),
-                        static_cast<unsigned long long>(ev.seq_num));
+        HOT_STORE_OVERFLOW(static_cast<std::uint32_t>(ev.source),
+                           static_cast<std::uint32_t>(store_.bucket_count()),
+                           static_cast<std::uint32_t>(store_.size()));
         return;
     }
 
@@ -124,9 +122,7 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
     if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
         if (!divergence_ring_.try_push(div)) {
             ++counters_.divergence_ring_drops;
-            LOG_HOT_LITERAL(::util::LogLevel::Warn, "RECON", "divergence_ring_drop",
-                            static_cast<unsigned long long>(div.type),
-                            static_cast<unsigned long long>(div.key));
+            HOT_RING_DROP(2u, static_cast<std::uint32_t>(div.type), 1u);
             return;
         }
         ++counters_.divergence_total;

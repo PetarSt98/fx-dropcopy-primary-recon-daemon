@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "util/log.hpp"
+#include "util/hot_log.hpp"
 
 namespace util {
 
@@ -84,27 +85,8 @@ private:
     std::atomic<std::uint64_t> written_{0};
 };
 
-AsyncLogger& hot_logger() noexcept;
-bool init_hot_logger(const AsyncLogger::Config& cfg) noexcept;
-void shutdown_hot_logger() noexcept;
-
 } // namespace util
-
-#define LOG_HOT_LITERAL(LVL, CAT_LIT, MSG_LIT, ARG0, ARG1)                                                \
-    do {                                                                                                \
-        constexpr std::size_t _cat_len = sizeof(CAT_LIT) > 0 ? sizeof(CAT_LIT) - 1 : 0;                 \
-        constexpr std::size_t _msg_len = sizeof(MSG_LIT) > 0 ? sizeof(MSG_LIT) - 1 : 0;                 \
-        ::util::hot_logger().try_log((LVL), (CAT_LIT), _cat_len, (MSG_LIT), _msg_len, (ARG0), (ARG1));  \
-    } while (0)
-
-#define LOG_HOT_TRACE(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Trace, "HOT", (MSG_LIT), (ARG0), (ARG1))
-#define LOG_HOT_DEBUG(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Debug, "HOT", (MSG_LIT), (ARG0), (ARG1))
-#define LOG_HOT_INFO(MSG_LIT, ARG0, ARG1)  LOG_HOT_LITERAL(::util::LogLevel::Info,  "HOT", (MSG_LIT), (ARG0), (ARG1))
-#define LOG_HOT_WARN(MSG_LIT, ARG0, ARG1)  LOG_HOT_LITERAL(::util::LogLevel::Warn,  "HOT", (MSG_LIT), (ARG0), (ARG1))
-#define LOG_HOT_ERROR(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Error, "HOT", (MSG_LIT), (ARG0), (ARG1))
-#define LOG_HOT_FATAL(MSG_LIT, ARG0, ARG1) LOG_HOT_LITERAL(::util::LogLevel::Fatal, "HOT", (MSG_LIT), (ARG0), (ARG1))
 
 // Formatting is not hot-path safe; reserve for diagnostics or warm paths.
 #define LOG_WARM_FMT(LVL, CAT, FMT, ...) ::util::hot_logger().try_logf((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
-#define LOG_HOT_FMT(LVL, CAT, FMT, ...)  LOG_WARM_FMT((LVL), (CAT), (FMT) __VA_OPT__(, __VA_ARGS__))
 

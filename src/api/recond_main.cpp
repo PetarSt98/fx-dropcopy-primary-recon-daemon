@@ -13,7 +13,7 @@
 #include "core/order_state_store.hpp"
 #include "ingest/aeron_subscriber.hpp"
 #include "util/arena.hpp"
-#include "util/async_log.hpp"
+#include "util/hot_log.hpp"
 
 int main(int argc, char** argv) {
     if (argc < 5) {
@@ -22,8 +22,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    util::AsyncLogger::Config hot_cfg{};
-    hot_cfg.capacity_pow2 = 1u << 15;
+    util::HotLogger::Config hot_cfg{};
+    hot_cfg.ring_size_pow2 = 1u << 10;
     hot_cfg.use_rdtsc = true;
     if (!init_hot_logger(hot_cfg)) {
         LOG_SLOW_ERROR("Failed to start async logger for fx_exec_recond");

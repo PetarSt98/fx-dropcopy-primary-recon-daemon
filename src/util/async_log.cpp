@@ -213,11 +213,5 @@ void AsyncLogger::consumer_loop() noexcept {
     }
 }
 
-AsyncLogger& hot_logger() noexcept { return *global_hot_logger(); }
-
-bool init_hot_logger(const AsyncLogger::Config& cfg) noexcept { return global_hot_logger()->start(cfg); }
-
-void shutdown_hot_logger() noexcept { global_hot_logger()->stop(); }
-
 } // namespace util
 

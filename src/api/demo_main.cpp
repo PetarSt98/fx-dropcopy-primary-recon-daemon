@@ -11,7 +11,7 @@
 #include "ingest/fix_parser.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
-#include "util/async_log.hpp"
+#include "util/hot_log.hpp"
 #include "util/soh.hpp"
 
 // SPSC rings are fixed-size (power of two). On push failure the caller drops and counts the
@@ -60,8 +60,8 @@ void ingest_thread(std::atomic<bool>& stop_flag, Ring& ring, ThreadStats& stats,
 int main() {
     // Thread lifecycle: main sets up structures, launches ingest + reconciler threads, and on
     // shutdown sets stop_flag then joins in deterministic order (ingest before reconciler).
-    util::AsyncLogger::Config hot_cfg{};
-    hot_cfg.capacity_pow2 = 1u << 14;
+    util::HotLogger::Config hot_cfg{};
+    hot_cfg.ring_size_pow2 = 1u << 10;
     hot_cfg.use_rdtsc = true;
     if (!init_hot_logger(hot_cfg)) {
         LOG_SLOW_ERROR("Failed to start async logger for demo");
