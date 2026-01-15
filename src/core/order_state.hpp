@@ -7,6 +7,7 @@
 
 #include "core/exec_event.hpp"
 #include "core/order_lifecycle.hpp"
+#include "core/recon_state.hpp"
 #include "util/arena.hpp"
 
 namespace core {
@@ -51,6 +52,19 @@ struct OrderState {
     bool has_divergence{false};
     bool has_gap{false};
     std::uint32_t divergence_count{0};
+
+    // ===== Reconciliation overlay (FX-7051) =====
+    // Tracks reconciliation lifecycle separately from FIX execution state.
+    std::uint64_t primary_last_seen_tsc{0};
+    std::uint64_t dropcopy_last_seen_tsc{0};
+    std::uint64_t mismatch_first_seen_tsc{0};
+    std::uint64_t recon_deadline_tsc{0};
+
+    ReconState recon_state{ReconState::Unknown};
+    MismatchMask current_mismatch{};      // 1-byte mask
+
+    std::uint32_t timer_generation{0};    // generation-based lazy cancel
+    std::uint8_t gap_suppression_epoch{0};
 };
 
 inline OrderState* create_order_state(util::Arena& arena, OrderKey key) noexcept {
@@ -63,6 +77,7 @@ inline OrderState* create_order_state(util::Arena& arena, OrderKey key) noexcept
     state->key = key;
     state->internal_status = OrdStatus::Unknown;
     state->dropcopy_status = OrdStatus::Unknown;
+    state->recon_state = ReconState::Unknown;
     return state;
 }
 
@@ -123,6 +138,57 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     return true;
 }
 
+// Pure, noexcept mismatch computation for hot path.
+// No tolerance parameters in this version (tolerance/config comes in FX-7053/FX-7200).
+[[nodiscard]] inline MismatchMask compute_mismatch(const OrderState& os) noexcept {
+    MismatchMask m{};
+
+    // Existence mismatch: if one side seen but not the other
+    if (os.seen_internal != os.seen_dropcopy) {
+        m.set(MismatchMask::EXISTENCE);
+        return m;  // Early return on existence mismatch
+    }
+
+    // If neither side seen, return empty mask
+    if (!os.seen_internal && !os.seen_dropcopy) {
+        return m;
+    }
+
+    // Both sides seen: compare fields
+
+    // Status mismatch
+    if (os.internal_status != os.dropcopy_status) {
+        m.set(MismatchMask::STATUS);
+    }
+
+    // CumQty mismatch
+    if (os.internal_cum_qty != os.dropcopy_cum_qty) {
+        m.set(MismatchMask::CUM_QTY);
+    }
+
+    // LEAVES_QTY: Not computed in v1 because total order qty (order_qty) is not tracked
+    // in OrderState. LEAVES_QTY requires: leaves = order_qty - cum_qty.
+    // This will be addressed in a future ticket when order_qty tracking is added.
+
+    // AvgPx mismatch
+    if (os.internal_avg_px != os.dropcopy_avg_px) {
+        m.set(MismatchMask::AVG_PX);
+    }
+
+    // ExecID mismatch: compare lengths first, then content if needed
+    if (os.last_internal_exec_id_len != os.last_dropcopy_exec_id_len) {
+        m.set(MismatchMask::EXEC_ID);
+    } else if (os.last_internal_exec_id_len > 0) {
+        if (std::memcmp(os.last_internal_exec_id, os.last_dropcopy_exec_id, 
+                        os.last_internal_exec_id_len) != 0) {
+            m.set(MismatchMask::EXEC_ID);
+        }
+    }
+
+    return m;
+}
+
+static_assert(sizeof(OrderState) <= 256, "OrderState exceeds cache-friendly size limit");
 static_assert(std::is_trivially_copyable_v<OrderState>, "OrderState must remain trivially copyable");
 
 } // namespace core
