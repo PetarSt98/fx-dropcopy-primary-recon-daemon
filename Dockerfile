@@ -9,14 +9,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN sed -i '/backports/d' /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-    && update-ca-certificates \
-    && apt-get install -y --no-install-recommends \
         build-essential \
+        ca-certificates \
         cmake \
         curl \
         git \
-        gradle \
         libbsd-dev \
         ninja-build \
         openjdk-17-jdk-headless \
@@ -31,18 +28,13 @@ FROM build-base AS aeron
 ARG AERON_VERSION=1.43.0
 WORKDIR /tmp/aeron
 
-RUN git -c http.sslVerify=false clone --branch ${AERON_VERSION} --depth 1 https://github.com/real-logic/aeron.git . && \
-    # Pre-download gradle to prevent wrapper from downloading
-    mkdir -p ~/.gradle/wrapper/dists/gradle-8.1.1-all && \
-    curl -kL 'https://github.com/gradle/gradle-distributions/releases/download/v8.1.1/gradle-8.1.1-all.zip' -o /tmp/gradle.zip && \
-    python3 -m zipfile -e /tmp/gradle.zip ~/.gradle/wrapper/dists/gradle-8.1.1-all && \
-    rm /tmp/gradle.zip && \
-    cmake -S . -B /tmp/aeron-build -G Ninja \
+RUN git clone --branch ${AERON_VERSION} --depth 1 https://github.com/real-logic/aeron.git . \
+    && cmake -S . -B /tmp/aeron-build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -Daeron_BUILD_SAMPLES=OFF \
-        -Daeron_BUILD_TESTS=OFF && \
-    cmake --build /tmp/aeron-build --parallel && \
-    cmake --install /tmp/aeron-build --prefix /opt/aeron
+        -Daeron_BUILD_TESTS=OFF \
+    && cmake --build /tmp/aeron-build --parallel \
+    && cmake --install /tmp/aeron-build --prefix /opt/aeron
 
 # Developer image: builds the project and keeps the build tree for tests/debugging
 FROM build-base AS dev
