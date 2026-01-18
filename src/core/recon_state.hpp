@@ -33,13 +33,16 @@ struct MismatchMask {
 
     [[nodiscard]] constexpr bool has(std::uint8_t flag) const noexcept { return (v & flag) != 0; }
     constexpr void set(std::uint8_t flag) noexcept { v = static_cast<std::uint8_t>(v | flag); }
-    constexpr void clear(std::uint8_t flag) noexcept { v = static_cast<std::uint8_t>(v & ~flag); }
+    constexpr void clear(std::uint8_t flag) noexcept { 
+        v = static_cast<std::uint8_t>(v & static_cast<std::uint8_t>(~flag)); 
+    }
 
     [[nodiscard]] constexpr bool operator==(const MismatchMask& o) const noexcept { return v == o.v; }
     [[nodiscard]] constexpr bool operator!=(const MismatchMask& o) const noexcept { return v != o.v; }
 };
 
 static_assert(sizeof(MismatchMask) == 1, "MismatchMask must be exactly 1 byte");
+static_assert(alignof(MismatchMask) == 1, "MismatchMask must have 1-byte alignment");
 static_assert(std::is_trivially_copyable_v<MismatchMask>, "MismatchMask must be trivially copyable");
 static_assert(std::is_standard_layout_v<MismatchMask>, "MismatchMask must be standard layout");
 
