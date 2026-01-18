@@ -29,12 +29,12 @@ TEST_F(ReconTimerTest, Schedule_IncrementsGeneration) {
     core::OrderState os = make_order_state(12345);
     const std::uint32_t initial_gen = os.timer_generation;
 
-    core::schedule_recon_deadline(timer_, os, 5 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 5 * MS);
 
     EXPECT_EQ(os.timer_generation, initial_gen + 1);
 
     // Schedule again - should increment again
-    core::schedule_recon_deadline(timer_, os, 10 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 10 * MS);
     EXPECT_EQ(os.timer_generation, initial_gen + 2);
 }
 
@@ -43,13 +43,13 @@ TEST_F(ReconTimerTest, Schedule_SetsDeadlineTsc) {
     core::OrderState os = make_order_state(12345);
     const std::uint64_t deadline = 50 * MS;
 
-    core::schedule_recon_deadline(timer_, os, deadline);
+    (void)core::schedule_recon_deadline(timer_, os, deadline);
 
     EXPECT_EQ(os.recon_deadline_tsc, deadline);
 
     // Schedule with new deadline - should update
     const std::uint64_t new_deadline = 100 * MS;
-    core::schedule_recon_deadline(timer_, os, new_deadline);
+    (void)core::schedule_recon_deadline(timer_, os, new_deadline);
     EXPECT_EQ(os.recon_deadline_tsc, new_deadline);
 }
 
@@ -77,7 +77,7 @@ TEST_F(ReconTimerTest, Cancel_IncrementsGeneration) {
     core::OrderState os = make_order_state(12345);
 
     // Schedule first
-    core::schedule_recon_deadline(timer_, os, 5 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 5 * MS);
     const std::uint32_t gen_after_schedule = os.timer_generation;
 
     // Cancel - should increment generation
@@ -95,7 +95,7 @@ TEST_F(ReconTimerTest, Cancel_ClearsDeadlineTsc) {
     const std::uint64_t deadline = 50 * MS;
 
     // Schedule first
-    core::schedule_recon_deadline(timer_, os, deadline);
+    (void)core::schedule_recon_deadline(timer_, os, deadline);
     EXPECT_EQ(os.recon_deadline_tsc, deadline);
 
     // Cancel - should clear deadline
@@ -108,7 +108,7 @@ TEST_F(ReconTimerTest, IsValid_MatchingGeneration) {
     core::OrderState os = make_order_state(12345);
 
     // Schedule and capture generation
-    core::schedule_recon_deadline(timer_, os, 5 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 5 * MS);
     const std::uint32_t scheduled_gen = os.timer_generation;
 
     // Should be valid immediately after schedule
@@ -120,7 +120,7 @@ TEST_F(ReconTimerTest, IsValid_StaleGeneration) {
     core::OrderState os = make_order_state(12345);
 
     // Schedule and capture generation
-    core::schedule_recon_deadline(timer_, os, 5 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 5 * MS);
     const std::uint32_t scheduled_gen = os.timer_generation;
 
     // Cancel - increments generation
@@ -138,11 +138,11 @@ TEST_F(ReconTimerTest, Refresh_InvalidatesOldTimer) {
     core::OrderState os = make_order_state(12345);
 
     // Schedule initial timer
-    core::schedule_recon_deadline(timer_, os, 5 * MS);
+    (void)core::schedule_recon_deadline(timer_, os, 5 * MS);
     const std::uint32_t old_gen = os.timer_generation;
 
     // Refresh with new deadline
-    core::refresh_recon_deadline(timer_, os, 10 * MS);
+    (void)core::refresh_recon_deadline(timer_, os, 10 * MS);
     const std::uint32_t new_gen = os.timer_generation;
 
     // Old generation should be invalid
@@ -161,7 +161,7 @@ TEST_F(ReconTimerTest, Refresh_SetsNewDeadline) {
 
     // Schedule initial timer
     const std::uint64_t old_deadline = 50 * MS;
-    core::schedule_recon_deadline(timer_, os, old_deadline);
+    (void)core::schedule_recon_deadline(timer_, os, old_deadline);
     EXPECT_EQ(os.recon_deadline_tsc, old_deadline);
 
     // Refresh with new deadline
