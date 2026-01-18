@@ -167,8 +167,9 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     }
 
     // LEAVES_QTY: Not computed in v1 because total order qty (order_qty) is not tracked
-    // in OrderState. LEAVES_QTY requires: leaves = order_qty - cum_qty.
-    // This will be addressed in a future ticket when order_qty tracking is added.
+    // in OrderState. Future implementation will either compute leaves_qty
+    // as (order_qty - cum_qty) or compare directly-reported leaves_qty values
+    // from both feeds once order_qty tracking is added.
 
     // AvgPx mismatch
     if (os.internal_avg_px != os.dropcopy_avg_px) {
