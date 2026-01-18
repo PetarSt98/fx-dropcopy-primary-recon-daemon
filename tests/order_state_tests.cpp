@@ -302,6 +302,19 @@ TEST(ShouldEmitDivergenceTest, DifferentMismatch_ReturnsTrue) {
     EXPECT_TRUE(core::should_emit_divergence(os, new_mismatch, 1001, 1'000'000'000));
 }
 
+TEST(ShouldEmitDivergenceTest, ClockAnomaly_ReturnsTrue) {
+    core::OrderState os{};
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::STATUS);
+
+    // Simulate a previous emission at a future timestamp (clock anomaly/rollover)
+    os.last_divergence_emit_tsc = 10000;
+    os.last_emitted_mismatch = mismatch;
+
+    // When now_tsc < last_divergence_emit_tsc, should emit to be safe
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 5000, 1'000'000'000));
+}
+
 TEST(RecordDivergenceEmissionTest, UpdatesAllFields) {
     core::OrderState os{};
     core::MismatchMask mismatch{};

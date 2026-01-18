@@ -216,6 +216,10 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     }
 
     // Deduplicate if same mismatch within window
+    // Guard against underflow if now_tsc < last_divergence_emit_tsc (e.g., TSC rollover)
+    if (now_tsc < os.last_divergence_emit_tsc) {
+        return true;  // Emit to be safe on clock anomaly
+    }
     return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_ns;
 }
 
