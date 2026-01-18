@@ -283,11 +283,13 @@ TEST_F(WheelTimerTest, StatsAccuracy) {
     // Test overflow tracking
     const std::uint64_t deadline = 50 * MS;
     for (std::size_t i = 0; i < WheelTimer::BUCKET_CAPACITY; ++i) {
-        timer_.schedule(1000 + i, 1, deadline);
+        (void)timer_.schedule(1000 + i, 1, deadline);
     }
     const auto scheduled_before_overflow = timer_.stats().scheduled;
     
     // This should fail and increment overflow counter
+    // Note: stats().scheduled counts attempts (not successes), so it increments
+    // even when schedule() returns false due to overflow
     EXPECT_FALSE(timer_.schedule(9999, 1, deadline));
     EXPECT_EQ(timer_.stats().scheduled, scheduled_before_overflow + 1);  // Attempt counted
     EXPECT_EQ(timer_.stats().overflow_dropped, 1u);
