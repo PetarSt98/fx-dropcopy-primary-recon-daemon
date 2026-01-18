@@ -129,12 +129,13 @@ public:
                     const auto gen = entry.generation;
                     const auto deadline = entry.deadline_tsc;
                     bucket.swap_erase(i);
-                    
+
                     // Re-schedule (may fail if target bucket full)
                     if (schedule(key, gen, deadline)) {
                         ++stats_.rescheduled;
-                        --stats_.scheduled;  // Don't double-count
                     }
+                    // Always decrement scheduled to avoid double-counting, even if reschedule failed
+                    --stats_.scheduled;
                     // Don't increment i
                 }
             }
