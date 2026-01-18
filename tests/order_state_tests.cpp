@@ -230,4 +230,99 @@ TEST(ComputeMismatchTest, BothSeenAndMatch_ReturnsEmpty) {
     EXPECT_TRUE(mask.none());
 }
 
+// ============================================================================
+// FX-7053 Part 1: Divergence Deduplication Tests
+// ============================================================================
+
+TEST(OrderStateTest, DefaultInit_DivergenceFieldsZeroed) {
+    util::Arena arena(1024);
+    core::OrderState* state = core::create_order_state(arena, 42);
+    ASSERT_NE(state, nullptr);
+
+    // Verify divergence tracking fields are properly initialized
+    EXPECT_EQ(state->last_divergence_emit_tsc, 0u);
+    EXPECT_TRUE(state->last_emitted_mismatch.none());
+    EXPECT_EQ(state->divergence_emit_count, 0u);
+}
+
+TEST(OrderStateTest, SizeWithinLimit) {
+    // Explicit test for size constraint (also checked by static_assert)
+    EXPECT_LE(sizeof(core::OrderState), 256u);
+}
+
+TEST(ShouldEmitDivergenceTest, NeverEmitted_ReturnsTrue) {
+    core::OrderState os{};
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::STATUS);
+
+    // First emission should always return true (last_divergence_emit_tsc == 0)
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000, 1'000'000'000));
+}
+
+TEST(ShouldEmitDivergenceTest, SameMismatchWithinWindow_ReturnsFalse) {
+    core::OrderState os{};
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::STATUS);
+
+    // Simulate a previous emission
+    os.last_divergence_emit_tsc = 1000;
+    os.last_emitted_mismatch = mismatch;
+
+    // Same mismatch within dedup window (500 tsc < 1 second window)
+    EXPECT_FALSE(core::should_emit_divergence(os, mismatch, 1500, 1'000'000'000));
+}
+
+TEST(ShouldEmitDivergenceTest, SameMismatchAfterWindow_ReturnsTrue) {
+    core::OrderState os{};
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::STATUS);
+
+    // Simulate a previous emission
+    os.last_divergence_emit_tsc = 1000;
+    os.last_emitted_mismatch = mismatch;
+
+    // Same mismatch after window expires
+    std::uint64_t dedup_window = 1'000'000'000;
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000 + dedup_window, dedup_window));
+}
+
+TEST(ShouldEmitDivergenceTest, DifferentMismatch_ReturnsTrue) {
+    core::OrderState os{};
+    core::MismatchMask old_mismatch{};
+    old_mismatch.set(core::MismatchMask::STATUS);
+
+    core::MismatchMask new_mismatch{};
+    new_mismatch.set(core::MismatchMask::CUM_QTY);
+
+    // Simulate a previous emission with different mismatch
+    os.last_divergence_emit_tsc = 1000;
+    os.last_emitted_mismatch = old_mismatch;
+
+    // Different mismatch should always return true (even within window)
+    EXPECT_TRUE(core::should_emit_divergence(os, new_mismatch, 1001, 1'000'000'000));
+}
+
+TEST(RecordDivergenceEmissionTest, UpdatesAllFields) {
+    core::OrderState os{};
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::STATUS);
+    mismatch.set(core::MismatchMask::CUM_QTY);
+
+    // Record emission
+    core::record_divergence_emission(os, mismatch, 12345);
+
+    EXPECT_EQ(os.last_divergence_emit_tsc, 12345u);
+    EXPECT_EQ(os.last_emitted_mismatch, mismatch);
+    EXPECT_EQ(os.divergence_emit_count, 1u);
+
+    // Record another emission
+    core::MismatchMask mismatch2{};
+    mismatch2.set(core::MismatchMask::AVG_PX);
+    core::record_divergence_emission(os, mismatch2, 67890);
+
+    EXPECT_EQ(os.last_divergence_emit_tsc, 67890u);
+    EXPECT_EQ(os.last_emitted_mismatch, mismatch2);
+    EXPECT_EQ(os.divergence_emit_count, 2u);
+}
+
 } // namespace

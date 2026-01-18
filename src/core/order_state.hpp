@@ -65,6 +65,13 @@ struct OrderState {
 
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
     std::uint8_t gap_suppression_epoch{0};
+
+    // ===== Divergence emission tracking (FX-7053) =====
+    // These fields support idempotent divergence emission to avoid flooding
+    // the downstream divergence queue with repeated identical events.
+    std::uint64_t last_divergence_emit_tsc{0};  // When last divergence was emitted (0 = never)
+    MismatchMask last_emitted_mismatch{};       // What mismatch bits were last emitted
+    std::uint32_t divergence_emit_count{0};     // Total divergences emitted for this order (lifetime)
 };
 
 inline OrderState* create_order_state(util::Arena& arena, OrderKey key) noexcept {
@@ -187,6 +194,41 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     }
 
     return m;
+}
+
+// Check if a divergence should be emitted or deduplicated.
+// Returns true if enough time has passed since last emission with same mismatch.
+// Returns false if this would be a duplicate (suppress emission).
+[[nodiscard]] inline bool should_emit_divergence(
+    const OrderState& os,
+    MismatchMask current_mismatch,
+    std::uint64_t now_tsc,
+    std::uint64_t dedup_window_ns
+) noexcept {
+    // Always emit if mismatch changed
+    if (current_mismatch != os.last_emitted_mismatch) {
+        return true;
+    }
+
+    // Always emit if never emitted before
+    if (os.last_divergence_emit_tsc == 0) {
+        return true;
+    }
+
+    // Deduplicate if same mismatch within window
+    return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_ns;
+}
+
+// Record that a divergence was emitted.
+// Call this after successfully emitting to update tracking fields.
+inline void record_divergence_emission(
+    OrderState& os,
+    MismatchMask emitted_mismatch,
+    std::uint64_t emit_tsc
+) noexcept {
+    os.last_divergence_emit_tsc = emit_tsc;
+    os.last_emitted_mismatch = emitted_mismatch;
+    ++os.divergence_emit_count;
 }
 
 static_assert(sizeof(OrderState) <= 256, "OrderState exceeds cache-friendly size limit");

@@ -36,7 +36,21 @@ struct ReconCounters {
     std::uint64_t dropcopy_seq_duplicates{0};
     std::uint64_t dropcopy_seq_out_of_order{0};
     std::uint64_t sequence_gap_ring_drops{0};
+
+    // ===== Two-stage reconciliation counters (FX-7053) =====
+    std::uint64_t mismatch_observed{0};       // Mismatches detected, entered grace period
+    std::uint64_t mismatch_confirmed{0};      // Mismatches confirmed after grace expired
+    std::uint64_t false_positive_avoided{0};  // Mismatches resolved before grace expired
+    std::uint64_t orders_matched{0};          // Orders that reconciled successfully (both sides agree)
+    std::uint64_t divergence_deduped{0};      // Divergences suppressed (same mismatch within window)
+    std::uint64_t stale_timers_skipped{0};    // Timer callbacks skipped (generation mismatch)
+    std::uint64_t gap_suppressions{0};        // Divergences suppressed due to open sequence gaps
 };
+
+// Default deduplication window: don't re-emit identical divergence within this period.
+// This prevents flooding the divergence queue with repeated identical events.
+// Note: This may become configurable in future (FX-7200).
+static constexpr std::uint64_t DEFAULT_DIVERGENCE_DEDUP_WINDOW_NS = 1'000'000'000;  // 1 second
 
 class Reconciler {
 public:
