@@ -176,10 +176,10 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
         m.set(MismatchMask::AVG_PX);
     }
 
-    // ExecID mismatch: compare lengths first, then content if needed
+    // ExecID mismatch: compare lengths first, then content if both are populated
     if (os.last_internal_exec_id_len != os.last_dropcopy_exec_id_len) {
         m.set(MismatchMask::EXEC_ID);
-    } else if (os.last_internal_exec_id_len > 0) {
+    } else if (os.last_internal_exec_id_len > 0 && os.last_dropcopy_exec_id_len > 0) {
         if (std::memcmp(os.last_internal_exec_id, os.last_dropcopy_exec_id, 
                         os.last_internal_exec_id_len) != 0) {
             m.set(MismatchMask::EXEC_ID);
