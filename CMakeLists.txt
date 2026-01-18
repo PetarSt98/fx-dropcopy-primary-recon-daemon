@@ -204,6 +204,7 @@ add_executable(unit_tests_gtest
     tests/recon_state_tests.cpp
     tests/fixed_vec_tests.cpp
     tests/wheel_timer_tests.cpp
+    tests/recon_timer_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
