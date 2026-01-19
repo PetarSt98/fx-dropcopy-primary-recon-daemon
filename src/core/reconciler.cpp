@@ -1,12 +1,24 @@
 #include "core/reconciler.hpp"
 
-#include <chrono>
 #include <thread>
 
 #include "core/order_state.hpp"
 #include "core/order_lifecycle.hpp"
 #include "util/async_log.hpp"
 #include "util/rdtsc.hpp"
+
+// CPU pause intrinsics for HFT busy-wait loops
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    #ifdef _MSC_VER
+        #include <intrin.h>
+        #define CPU_PAUSE() _mm_pause()
+    #else
+        #define CPU_PAUSE() __builtin_ia32_pause()
+    #endif
+#else
+    // Fallback for non-x86 architectures (ARM, etc.)
+    #define CPU_PAUSE() ((void)0)
+#endif
 
 namespace core {
 
@@ -210,13 +222,15 @@ void Reconciler::run() {
             });
         }
 
-        // Backoff when idle
+        // Backoff when idle - use CPU pause instruction for HFT compliance
         if (!consumed) {
-            if (backoff < 16) {
+            if (backoff < 64) {
                 ++backoff;
-                std::this_thread::yield();
-            } else {
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
+            }
+            // Execute pause instructions proportional to backoff level
+            // This reduces CPU power while maintaining low-latency wake-up
+            for (std::uint32_t i = 0; i < backoff; ++i) {
+                CPU_PAUSE();
             }
         } else {
             backoff = 0;
