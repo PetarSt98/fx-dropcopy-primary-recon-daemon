@@ -319,9 +319,12 @@ inline void mark_gap_uncertainty(
     
     if (source == Source::Primary) {
         os.gap_uncertainty_flags |= GapUncertaintyFlags::PRIMARY;
-        os.gap_suppression_epoch = tracker.gap_epoch;
     } else {
         os.gap_uncertainty_flags |= GapUncertaintyFlags::DROPCOPY;
+    }
+    
+    // Track the maximum epoch across all sources (FX-7054)
+    if (os.gap_suppression_epoch < tracker. gap_epoch) {
         os.gap_suppression_epoch = tracker.gap_epoch;
     }
 }
