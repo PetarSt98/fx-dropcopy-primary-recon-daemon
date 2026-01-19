@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 #include <cassert>
@@ -180,6 +181,58 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
 
     // AvgPx mismatch
     if (os.internal_avg_px != os.dropcopy_avg_px) {
+        m.set(MismatchMask::AVG_PX);
+    }
+
+    // ExecID mismatch: compare lengths first, then content if both are populated
+    if (os.last_internal_exec_id_len != os.last_dropcopy_exec_id_len) {
+        m.set(MismatchMask::EXEC_ID);
+    } else if (os.last_internal_exec_id_len > 0 && os.last_dropcopy_exec_id_len > 0) {
+        if (std::memcmp(os.last_internal_exec_id, os.last_dropcopy_exec_id, 
+                        os.last_internal_exec_id_len) != 0) {
+            m.set(MismatchMask::EXEC_ID);
+        }
+    }
+
+    return m;
+}
+
+// Mismatch computation with tolerance parameters (FX-7053 Part 3).
+// Tolerances allow for minor differences without triggering mismatches.
+[[nodiscard]] inline MismatchMask compute_mismatch(
+    const OrderState& os,
+    std::int64_t qty_tolerance,
+    std::int64_t px_tolerance
+) noexcept {
+    MismatchMask m{};
+
+    // Existence mismatch: if one side seen but not the other
+    if (os.seen_internal != os.seen_dropcopy) {
+        m.set(MismatchMask::EXISTENCE);
+        return m;  // Early return on existence mismatch
+    }
+
+    // If neither side seen, return empty mask
+    if (!os.seen_internal && !os.seen_dropcopy) {
+        return m;
+    }
+
+    // Both sides seen: compare fields
+
+    // Status mismatch (no tolerance for status)
+    if (os.internal_status != os.dropcopy_status) {
+        m.set(MismatchMask::STATUS);
+    }
+
+    // CumQty mismatch with tolerance
+    const auto qty_diff = std::abs(os.internal_cum_qty - os.dropcopy_cum_qty);
+    if (qty_diff > qty_tolerance) {
+        m.set(MismatchMask::CUM_QTY);
+    }
+
+    // AvgPx mismatch with tolerance
+    const auto px_diff = std::abs(os.internal_avg_px - os.dropcopy_avg_px);
+    if (px_diff > px_tolerance) {
         m.set(MismatchMask::AVG_PX);
     }
 

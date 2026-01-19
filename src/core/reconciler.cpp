@@ -6,6 +6,7 @@
 #include "core/order_state.hpp"
 #include "core/order_lifecycle.hpp"
 #include "util/async_log.hpp"
+#include "util/time.hpp"
 
 namespace core {
 
@@ -68,15 +69,16 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 }
 
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
+    // === Sequence tracking (unchanged) ===
     SequenceGapEvent gap_ev{};
     SequenceGapEvent* gap_ptr = &gap_ev;
-    const std::uint64_t now_ts = ev.ingest_tsc;
+    const std::uint64_t now_tsc = ev.ingest_tsc;  // Use event timestamp for determinism
 
     bool has_gap = false;
     if (ev.source == Source::Primary) {
-        has_gap = track_sequence(primary_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_ts, gap_ptr);
+        has_gap = track_sequence(primary_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_tsc, gap_ptr);
     } else if (ev.source == Source::DropCopy) {
-        has_gap = track_sequence(dropcopy_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_ts, gap_ptr);
+        has_gap = track_sequence(dropcopy_seq_tracker_, ev.source, ev.session_id, ev.seq_num, now_tsc, gap_ptr);
     }
 
     if (has_gap) {
@@ -112,6 +114,7 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         }
     }
 
+    // === Get/create order state ===
     OrderState* st = store_.upsert(ev);
     if (!st) {
         ++counters_.store_overflow;
@@ -122,43 +125,60 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         return;
     }
 
+    // Mark orders affected by open gaps for suppression
     if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->has_gap = true;
+        // Set epoch to non-zero to enable gap suppression
+        if (st->gap_suppression_epoch == 0) {
+            st->gap_suppression_epoch = 1;
+        }
     }
 
+    // === Update appropriate view ===
     bool ok = false;
     if (ev.source == Source::Primary) {
         ++counters_.internal_events;
         ok = apply_internal_exec(*st, ev);
+        st->primary_last_seen_tsc = now_tsc;
     } else {
         ++counters_.dropcopy_events;
         ok = apply_dropcopy_exec(*st, ev);
+        st->dropcopy_last_seen_tsc = now_tsc;
     }
 
+    // Handle invalid state transitions (emit immediately - this is an error)
     if (!ok) {
-        Divergence div{};
-        fill_divergence_snapshot(*st, DivergenceType::StateMismatch, div);
-        if (!divergence_ring_.try_push(div)) {
-            ++counters_.divergence_ring_drops;
-        } else {
-            ++counters_.divergence_total;
-            increment_divergence_counter(div.type);
-        }
+        MismatchMask error_mismatch{};
+        error_mismatch.set(MismatchMask::STATUS);
+        st->recon_state = ReconState::DivergedConfirmed;
+        emit_confirmed_divergence(*st, error_mismatch, now_tsc);
+        ++counters_.mismatch_confirmed;
         return;
     }
 
-    Divergence div{};
-    if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
-        if (!divergence_ring_.try_push(div)) {
-            ++counters_.divergence_ring_drops;
-            LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
-                        "divergence_ring_drop type=%u key=%llu",
-                        static_cast<unsigned>(div.type),
-                        static_cast<unsigned long long>(div.key));
-            return;
+    // === Two-stage reconciliation ===
+    if (config_.enable_windowed_recon && timer_wheel_) {
+        // Compute current mismatch BEFORE state transition
+        const MismatchMask new_mismatch = compute_mismatch(*st, config_.qty_tolerance,
+                                                            config_.px_tolerance);
+        st->current_mismatch = new_mismatch;  // Set BEFORE transition
+
+        // Handle state transition based on mismatch
+        handle_recon_state_transition(*st, new_mismatch, now_tsc);
+    } else {
+        // Legacy behavior: immediate emission (backward compatibility / testing)
+        Divergence div{};
+        if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
+            if (!divergence_ring_.try_push(div)) {
+                ++counters_.divergence_ring_drops;
+                LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
+                            "divergence_ring_drop type=%u key=%llu",
+                            static_cast<unsigned>(div.type),
+                            static_cast<unsigned long long>(div.key));
+                return;
+            }
+            ++counters_.divergence_total;
+            increment_divergence_counter(div.type);
         }
-        ++counters_.divergence_total;
-        increment_divergence_counter(div.type);
     }
 }
 
@@ -166,16 +186,32 @@ void Reconciler::run() {
     ExecEvent primary_evt{};
     ExecEvent dropcopy_evt{};
     std::uint32_t backoff = 0;
+    last_poll_tsc_ = util::get_monotonic_ns();
+
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
+
+        // Hot path: drain event queues
         if (primary_.try_pop(primary_evt)) {
             process_event(primary_evt);
+            last_poll_tsc_ = primary_evt.ingest_tsc;
             consumed = true;
         }
         if (dropcopy_.try_pop(dropcopy_evt)) {
             process_event(dropcopy_evt);
+            last_poll_tsc_ = std::max(last_poll_tsc_, dropcopy_evt.ingest_tsc);
             consumed = true;
         }
+
+        // Warm path: poll timer wheel for expired deadlines
+        if (timer_wheel_) {
+            const std::uint64_t now = consumed ? last_poll_tsc_ : util::get_monotonic_ns();
+            timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
+                on_grace_deadline_expired(key, gen);
+            });
+        }
+
+        // Backoff when idle
         if (!consumed) {
             if (backoff < 16) {
                 ++backoff;
@@ -210,10 +246,20 @@ void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
     os.recon_state = ReconState::InGrace;
     os.current_mismatch = mismatch;
     os.mismatch_first_seen_tsc = now_tsc;
+    os.recon_deadline_tsc = now_tsc + config_.grace_period_ns;
 
+    // Schedule timer (requires non-null timer_wheel_)
     if (timer_wheel_) {
-        const std::uint64_t deadline = now_tsc + config_.grace_period_ns;
-        schedule_recon_deadline(*timer_wheel_, os, deadline);
+        const bool scheduled = schedule_recon_deadline(*timer_wheel_, os, os.recon_deadline_tsc);
+        if (!scheduled) {
+            // Timer wheel bucket overflow - fallback to immediate emission
+            // This is degraded mode, should be monitored
+            ++counters_.timer_overflow;
+            os.recon_state = ReconState::DivergedConfirmed;
+            emit_confirmed_divergence(os, mismatch, now_tsc);
+            ++counters_.mismatch_confirmed;
+            return;
+        }
     }
 
     ++counters_.mismatch_observed;
@@ -254,7 +300,15 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         // Gap still open - suppress and reschedule
         os->recon_state = ReconState::SuppressedByGap;
         if (timer_wheel_) {
-            refresh_recon_deadline(*timer_wheel_, *os, now + config_.gap_recheck_period_ns);
+            const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + config_.gap_recheck_period_ns);
+            if (!rescheduled) {
+                // Timer overflow during gap recheck - emit divergence
+                ++counters_.timer_overflow;
+                os->recon_state = ReconState::DivergedConfirmed;
+                emit_confirmed_divergence(*os, mismatch, now);
+                ++counters_.mismatch_confirmed;
+                return;
+            }
         }
         ++counters_.gap_suppressions;
     } else {
@@ -294,6 +348,90 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
 
     // Record emission for deduplication
     record_divergence_emission(os, mismatch, now_tsc);
+}
+
+void Reconciler::handle_recon_state_transition(
+    OrderState& os,
+    MismatchMask new_mismatch,
+    std::uint64_t now_tsc
+) noexcept {
+    switch (os.recon_state) {
+        case ReconState::Unknown:
+            // First event - determine initial state
+            if (os.seen_internal && !os.seen_dropcopy) {
+                os.recon_state = ReconState::AwaitingDropCopy;
+            } else if (os.seen_dropcopy && !os.seen_internal) {
+                os.recon_state = ReconState::AwaitingPrimary;
+            } else if (both_sides_seen(os)) {
+                // Both sides seen on first event (unusual but handle it)
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::Matched;
+                    ++counters_.orders_matched;
+                }
+            }
+            break;
+
+        case ReconState::AwaitingPrimary:
+            if (os.seen_internal) {
+                // Primary arrived - now we can compare
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::Matched;
+                    ++counters_.orders_matched;
+                }
+            }
+            break;
+
+        case ReconState::AwaitingDropCopy:
+            if (os.seen_dropcopy) {
+                // DropCopy arrived - now we can compare
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::Matched;
+                    ++counters_.orders_matched;
+                }
+            }
+            break;
+
+        case ReconState::InGrace:
+            if (new_mismatch.none()) {
+                // Mismatch resolved before deadline - false positive avoided!
+                exit_grace_period(os, now_tsc);
+            }
+            // else: still mismatched, timer will handle confirmation
+            break;
+
+        case ReconState::Matched:
+            if (new_mismatch.any()) {
+                // New mismatch after previous match - re-enter grace
+                enter_grace_period(os, new_mismatch, now_tsc);
+            }
+            break;
+
+        case ReconState::DivergedConfirmed:
+            if (new_mismatch.none()) {
+                // Divergence resolved - return to matched
+                os.recon_state = ReconState::Matched;
+                ++counters_.orders_matched;
+            }
+            break;
+
+        case ReconState::SuppressedByGap:
+            if (!is_gap_suppressed(os)) {
+                // Gap closed - re-evaluate
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::Matched;
+                    ++counters_.orders_matched;
+                }
+            }
+            break;
+    }
 }
 
 } // namespace core

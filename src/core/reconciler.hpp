@@ -48,6 +48,7 @@ struct ReconCounters {
     std::uint64_t divergence_deduped{0};      // Divergences suppressed (same mismatch within window)
     std::uint64_t stale_timers_skipped{0};    // Timer callbacks skipped (generation mismatch)
     std::uint64_t gap_suppressions{0};        // Divergences suppressed due to open sequence gaps
+    std::uint64_t timer_overflow{0};          // Timer wheel bucket overflow events (FX-7053 Part 3)
 };
 
 // Default deduplication window: don't re-emit identical divergence within this period.
@@ -131,6 +132,10 @@ public:
     void emit_confirmed_divergence(OrderState& os,
                                    MismatchMask mismatch,
                                    std::uint64_t now_tsc) noexcept;
+
+    // Handle state transition based on mismatch (FX-7053 Part 3)
+    void handle_recon_state_transition(OrderState& os, MismatchMask new_mismatch,
+                                       std::uint64_t now_tsc) noexcept;
 
     // Accessor for last poll TSC (used by tests)
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
