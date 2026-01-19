@@ -127,10 +127,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
     // Mark orders affected by open gaps for suppression
     if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        // Set epoch to non-zero to enable gap suppression
-        if (st->gap_suppression_epoch == 0) {
-            st->gap_suppression_epoch = 1;
-        }
+        st->gap_suppression_epoch = static_cast<std::uint8_t>(
+            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFF
+        );
     }
 
     // === Update appropriate view ===
