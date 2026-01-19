@@ -1,4 +1,8 @@
+#include <gtest/gtest.h>
 // Updates have been made to remove unused variables and add namespace qualifiers.
+
+#include "core/order_state.hpp"
+#include "util/tsc_calibration.hpp"
 
 // Line 272: Removed unused variable 'dedup_window_tsc'
 
