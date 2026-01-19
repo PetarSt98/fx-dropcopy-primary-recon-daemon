@@ -487,4 +487,33 @@ TEST(OrderStateTest, GapUncertaintyFlagsInitialization) {
     EXPECT_EQ(state->gap_uncertainty_flags, 0u);
 }
 
+TEST(OrderStateTest, MarkGapUncertainty_MultipleSources_TracksMaxEpoch) {
+    OrderState os{};
+    
+    SequenceTracker primary_tracker{};
+    primary_tracker.gap_open = true;
+    primary_tracker.gap_epoch = 5;
+    
+    SequenceTracker dropcopy_tracker{};
+    dropcopy_tracker. gap_open = true;
+    dropcopy_tracker.gap_epoch = 7;
+    
+    // Mark Primary first (lower epoch)
+    mark_gap_uncertainty(os, Source::Primary, primary_tracker);
+    EXPECT_EQ(os.gap_suppression_epoch, 5);
+    EXPECT_EQ(os.gap_uncertainty_flags, GapUncertaintyFlags:: PRIMARY);
+    
+    // Mark DropCopy - should update to max epoch, not overwrite
+    mark_gap_uncertainty(os, Source:: DropCopy, dropcopy_tracker);
+    EXPECT_EQ(os.gap_suppression_epoch, 7);  // Should be MAX
+    EXPECT_EQ(os.gap_uncertainty_flags, 
+              GapUncertaintyFlags::PRIMARY | GapUncertaintyFlags::DROPCOPY);
+    
+    // Test reverse order:  DropCopy marked first (higher epoch)
+    OrderState os2{};
+    mark_gap_uncertainty(os2, Source::DropCopy, dropcopy_tracker);
+    mark_gap_uncertainty(os2, Source::Primary, primary_tracker);
+    EXPECT_EQ(os2.gap_suppression_epoch, 7);  // Still MAX
+}
+
 } // namespace
