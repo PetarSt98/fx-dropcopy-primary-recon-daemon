@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "util/fixed_vec.hpp"
+#include "util/tsc_calibration.hpp"
 #include "core/order_state.hpp"  // For OrderKey
 
 namespace util {
@@ -14,9 +15,10 @@ namespace util {
 //
 // Design:
 // - Single-level timing wheel with NUM_BUCKETS slots
-// - Each bucket covers TICK_NS nanoseconds
+// - Each bucket covers TICK_NS nanoseconds (converted to TSC cycles at runtime)
 // - Total coverage = NUM_BUCKETS * TICK_NS (e.g., 256 * 1ms = 256ms)
 // - Deadlines beyond wheel range are placed in future bucket, re-checked on expiry
+// - All timestamps are in TSC cycles for HFT performance
 //
 // Cancellation:
 // - Uses generation counter pattern (no explicit cancel API)
@@ -29,9 +31,9 @@ namespace util {
 // Memory: All storage is pre-allocated. No heap allocations after construction.
 class WheelTimer {
 public:
-    // Configuration constants
+    // Configuration constants (in nanoseconds, converted to TSC at runtime)
     static constexpr std::size_t NUM_BUCKETS = 256;           // Power of 2 for fast masking
-    static constexpr std::uint64_t TICK_NS = 1'000'000;       // 1ms per tick
+    static constexpr std::uint64_t TICK_NS = 1'000'000;       // 1ms per tick (in nanoseconds)
     static constexpr std::size_t BUCKET_CAPACITY = 1024;      // Max entries per bucket
     static constexpr std::uint64_t WHEEL_SPAN_NS = NUM_BUCKETS * TICK_NS;  // 256ms total coverage
 
@@ -41,7 +43,7 @@ public:
     struct Entry {
         core::OrderKey key{0};
         std::uint32_t generation{0};
-        std::uint64_t deadline_tsc{0};  // Absolute deadline for far-future re-check
+        std::uint64_t deadline_tsc{0};  // Absolute deadline in TSC cycles
     };
 
     static_assert(std::is_trivially_copyable_v<Entry>, "Entry must be trivially copyable");
@@ -54,17 +56,23 @@ public:
         std::uint64_t overflow_dropped{0};  // Entries dropped due to bucket overflow
     };
 
-    // Constructor - initializes wheel at given starting time
+    // Constructor - initializes wheel at given starting time (in TSC cycles)
     explicit WheelTimer(std::uint64_t start_tsc = 0) noexcept
-        : current_tick_(start_tsc / TICK_NS)
-        , last_poll_tsc_(start_tsc) {}
+        : tick_tsc_(ns_to_tsc(TICK_NS))
+        , current_tick_(tick_tsc_ > 0 ? (start_tsc / tick_tsc_) : 0)
+        , last_poll_tsc_(start_tsc) {
+        // Ensure tick_tsc_ is at least 1 to prevent division by zero
+        if (tick_tsc_ == 0) {
+            tick_tsc_ = 1;
+        }
+    }
 
     // Schedule a deadline for an order.
     //
     // Parameters:
     //   key          - OrderKey identifying the order
     //   generation   - Current timer_generation from OrderState (for lazy cancellation)
-    //   deadline_tsc - Absolute timestamp (nanoseconds) when deadline expires
+    //   deadline_tsc - Absolute timestamp (in TSC cycles) when deadline expires
     //
     // Returns: true if scheduled successfully, false if bucket overflowed
     //
@@ -74,7 +82,7 @@ public:
                                 std::uint64_t deadline_tsc) noexcept {
         ++stats_.scheduled;
 
-        const std::uint64_t deadline_tick = deadline_tsc / TICK_NS;
+        const std::uint64_t deadline_tick = deadline_tsc / tick_tsc_;
         std::uint64_t delta_ticks = (deadline_tick > current_tick_)
             ? (deadline_tick - current_tick_)
             : 0;
@@ -98,7 +106,7 @@ public:
     // Poll for expired deadlines and invoke callback for each.
     //
     // Parameters:
-    //   now_tsc    - Current timestamp (nanoseconds)
+    //   now_tsc    - Current timestamp (in TSC cycles)
     //   on_expired - Callback invoked as on_expired(OrderKey key, uint32_t generation)
     //                Caller MUST check generation against OrderState.timer_generation
     //                to detect if timer was cancelled (generation mismatch = skip)
@@ -106,7 +114,7 @@ public:
     // Complexity: O(number of expired entries), NOT O(total scheduled)
     template <typename F>
     void poll_expired(std::uint64_t now_tsc, F&& on_expired) noexcept {
-        const std::uint64_t now_tick = now_tsc / TICK_NS;
+        const std::uint64_t now_tick = now_tsc / tick_tsc_;
 
         // Process all ticks from last poll to now
         while (current_tick_ < now_tick) {
@@ -149,7 +157,7 @@ public:
     // Advance the wheel without processing expirations.
     // Use poll_expired() in normal operation; this is for testing/edge cases.
     void advance(std::uint64_t now_tsc) noexcept {
-        const std::uint64_t now_tick = now_tsc / TICK_NS;
+        const std::uint64_t now_tick = now_tsc / tick_tsc_;
         if (now_tick > current_tick_) {
             current_tick_ = now_tick;
         }
@@ -161,7 +169,7 @@ public:
         for (auto& bucket : buckets_) {
             bucket.clear();
         }
-        current_tick_ = start_tsc / TICK_NS;
+        current_tick_ = start_tsc / tick_tsc_;
         last_poll_tsc_ = start_tsc;
         stats_ = Stats{};
     }
@@ -170,6 +178,7 @@ public:
     [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
     [[nodiscard]] std::uint64_t current_tick() const noexcept { return current_tick_; }
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
+    [[nodiscard]] std::uint64_t tick_tsc() const noexcept { return tick_tsc_; }
 
     // Count total entries across all buckets (O(NUM_BUCKETS), for debugging/monitoring)
     [[nodiscard]] std::size_t total_pending() const noexcept {
@@ -183,6 +192,7 @@ public:
 private:
     using Bucket = FixedCapacityVec<Entry, BUCKET_CAPACITY>;
 
+    std::uint64_t tick_tsc_{1};  // TSC cycles per tick (converted from TICK_NS at construction)
     std::array<Bucket, NUM_BUCKETS> buckets_{};
     std::uint64_t current_tick_{0};
     std::uint64_t last_poll_tsc_{0};

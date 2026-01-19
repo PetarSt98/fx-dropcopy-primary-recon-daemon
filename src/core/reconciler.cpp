@@ -6,6 +6,7 @@
 #include "core/order_lifecycle.hpp"
 #include "util/async_log.hpp"
 #include "util/rdtsc.hpp"
+#include "util/tsc_calibration.hpp"
 
 // CPU pause intrinsics for HFT busy-wait loops
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
@@ -259,7 +260,8 @@ void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
     os.recon_state = ReconState::InGrace;
     os.current_mismatch = mismatch;
     os.mismatch_first_seen_tsc = now_tsc;
-    os.recon_deadline_tsc = now_tsc + config_.grace_period_ns;
+    // Convert nanoseconds config to TSC cycles before adding to TSC timestamp
+    os.recon_deadline_tsc = now_tsc + util::ns_to_tsc(config_.grace_period_ns);
 
     // Schedule timer (requires non-null timer_wheel_)
     if (timer_wheel_) {
@@ -313,7 +315,8 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         // Gap still open - suppress and reschedule
         os->recon_state = ReconState::SuppressedByGap;
         if (timer_wheel_) {
-            const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + config_.gap_recheck_period_ns);
+            // Convert nanoseconds config to TSC cycles before adding to TSC timestamp
+            const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + util::ns_to_tsc(config_.gap_recheck_period_ns));
             if (!rescheduled) {
                 // Timer overflow during gap recheck - emit divergence
                 ++counters_.timer_overflow;

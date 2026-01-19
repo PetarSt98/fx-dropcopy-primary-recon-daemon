@@ -10,6 +10,7 @@
 #include "core/order_lifecycle.hpp"
 #include "core/recon_state.hpp"
 #include "util/arena.hpp"
+#include "util/tsc_calibration.hpp"
 
 namespace core {
 
@@ -252,6 +253,7 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
 // Check if a divergence should be emitted or deduplicated.
 // Returns true if enough time has passed since last emission with same mismatch.
 // Returns false if this would be a duplicate (suppress emission).
+// Note: dedup_window_ns is in nanoseconds but now_tsc is in TSC cycles
 [[nodiscard]] inline bool should_emit_divergence(
     const OrderState& os,
     MismatchMask current_mismatch,
@@ -273,7 +275,9 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     if (now_tsc < os.last_divergence_emit_tsc) {
         return true;  // Emit to be safe on clock anomaly
     }
-    return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_ns;
+    // Convert nanoseconds window to TSC cycles for correct comparison
+    const std::uint64_t dedup_window_tsc = util::ns_to_tsc(dedup_window_ns);
+    return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_tsc;
 }
 
 // Record that a divergence was emitted.
