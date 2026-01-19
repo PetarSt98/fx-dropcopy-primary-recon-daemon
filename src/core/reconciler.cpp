@@ -185,7 +185,7 @@ void Reconciler::run() {
     ExecEvent primary_evt{};
     ExecEvent dropcopy_evt{};
     std::uint32_t backoff = 0;
-    last_poll_tsc_ = util::get_monotonic_ns();
+    last_poll_tsc_ = util::rdtsc();
 
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
@@ -204,7 +204,7 @@ void Reconciler::run() {
 
         // Warm path: poll timer wheel for expired deadlines
         if (timer_wheel_) {
-            const std::uint64_t now = consumed ? last_poll_tsc_ : util::get_monotonic_ns();
+            const std::uint64_t now = consumed ? last_poll_tsc_ : util::rdtsc();
             timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
                 on_grace_deadline_expired(key, gen);
             });
