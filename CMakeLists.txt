@@ -228,5 +228,15 @@ gtest_discover_tests(integration_aeron_flow
   DISCOVERY_MODE PRE_TEST
 )
 
+add_executable(integration_reconciler_windowed
+    tests/integration/reconciler_windowed_tests.cpp
+)
+target_link_libraries(integration_reconciler_windowed PRIVATE fx_core aeron::aeron_client GTest::gtest_main)
+
+gtest_discover_tests(integration_reconciler_windowed
+  TEST_PREFIX integration_reconciler_windowed_
+  DISCOVERY_MODE PRE_TEST
+)
+
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
