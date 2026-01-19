@@ -225,13 +225,13 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     }
 
     // CumQty mismatch with tolerance
-    const auto qty_diff = std::abs(os.internal_cum_qty - os.dropcopy_cum_qty);
+    const auto qty_diff = std::llabs(os.internal_cum_qty - os.dropcopy_cum_qty);
     if (qty_diff > qty_tolerance) {
         m.set(MismatchMask::CUM_QTY);
     }
 
     // AvgPx mismatch with tolerance
-    const auto px_diff = std::abs(os.internal_avg_px - os.dropcopy_avg_px);
+    const auto px_diff = std::llabs(os.internal_avg_px - os.dropcopy_avg_px);
     if (px_diff > px_tolerance) {
         m.set(MismatchMask::AVG_PX);
     }
