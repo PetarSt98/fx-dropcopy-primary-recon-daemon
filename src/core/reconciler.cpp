@@ -401,8 +401,13 @@ void Reconciler::handle_recon_state_transition(
             if (new_mismatch.none()) {
                 // Mismatch resolved before deadline - false positive avoided!
                 exit_grace_period(os, now_tsc);
+            } else {
+                // Still mismatched: update tracked mismatch if its type/contents changed.
+                if (new_mismatch != os.current_mismatch) {
+                    os.current_mismatch = new_mismatch;
+                }
+                // Timer started when entering grace will handle confirmation.
             }
-            // else: still mismatched, timer will handle confirmation
             break;
 
         case ReconState::Matched:
