@@ -66,7 +66,7 @@ struct OrderState {
     MismatchMask current_mismatch{};      // 1-byte mask
 
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
-    std::uint8_t gap_suppression_epoch{0};
+    std::uint16_t gap_suppression_epoch{0};  // Upgraded to uint16_t to avoid wrap-around issues
 
     // ===== Divergence emission tracking (FX-7053) =====
     // These fields support idempotent divergence emission to avoid flooding

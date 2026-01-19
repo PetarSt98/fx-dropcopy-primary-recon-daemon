@@ -140,8 +140,8 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
     // Mark orders affected by open gaps for suppression
     if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->gap_suppression_epoch = static_cast<std::uint8_t>(
-            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFF
+        st->gap_suppression_epoch = static_cast<std::uint16_t>(
+            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFFFF
         );
     }
 
@@ -216,8 +216,10 @@ void Reconciler::run() {
         }
 
         // Warm path: poll timer wheel for expired deadlines
+        // Always use fresh rdtsc() to avoid missing timer deadlines
+        // (using stale last_poll_tsc_ could cause timers to be skipped)
         if (timer_wheel_) {
-            const std::uint64_t now = consumed ? last_poll_tsc_ : util::rdtsc();
+            const std::uint64_t now = util::rdtsc();
             timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
                 on_grace_deadline_expired(key, gen);
             });
