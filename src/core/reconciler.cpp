@@ -24,10 +24,33 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
       divergence_ring_(divergence_ring),
       seq_gap_ring_(seq_gap_ring) {}
 
+// New constructor with timer wheel and config (FX-7053)
+Reconciler::Reconciler(std::atomic<bool>& stop_flag,
+                       ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
+                       ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
+                       OrderStateStore& store,
+                       ReconCounters& counters,
+                       DivergenceRing& divergence_ring,
+                       SequenceGapRing& seq_gap_ring,
+                       util::WheelTimer* timer_wheel,
+                       const ReconConfig& config) noexcept
+    : stop_flag_(stop_flag),
+      primary_(primary),
+      dropcopy_(dropcopy),
+      store_(store),
+      counters_(counters),
+      divergence_ring_(divergence_ring),
+      seq_gap_ring_(seq_gap_ring),
+      timer_wheel_(timer_wheel),
+      config_(config) {}
+
 void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
     switch (type) {
     case DivergenceType::MissingFill:
         ++counters_.divergence_missing_fill;
+        break;
+    case DivergenceType::MissingDropCopy:
+        // No dedicated counter yet (could be added in future)
         break;
     case DivergenceType::PhantomOrder:
         ++counters_.divergence_phantom;
@@ -164,6 +187,113 @@ void Reconciler::run() {
             backoff = 0;
         }
     }
+}
+
+// ===== Two-stage pipeline helper implementations (FX-7053) =====
+
+bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
+    if (!config_.enable_gap_suppression) {
+        return false;
+    }
+
+    // Order is suppressed if it has been flagged during a gap
+    // and we still have an open gap on either side
+    if (os.gap_suppression_epoch == 0) {
+        return false;
+    }
+
+    return primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open;
+}
+
+void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
+                                    std::uint64_t now_tsc) noexcept {
+    os.recon_state = ReconState::InGrace;
+    os.current_mismatch = mismatch;
+    os.mismatch_first_seen_tsc = now_tsc;
+
+    if (timer_wheel_) {
+        const std::uint64_t deadline = now_tsc + config_.grace_period_ns;
+        schedule_recon_deadline(*timer_wheel_, os, deadline);
+    }
+
+    ++counters_.mismatch_observed;
+}
+
+void Reconciler::exit_grace_period(OrderState& os, std::uint64_t /*now_tsc*/) noexcept {
+    // Cancel timer by incrementing generation
+    cancel_recon_deadline(os);
+
+    os.recon_state = ReconState::Matched;
+    os.current_mismatch = MismatchMask{};
+
+    ++counters_.false_positive_avoided;
+    ++counters_.orders_matched;
+}
+
+void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen) noexcept {
+    OrderState* os = store_.find(key);
+    if (!os) {
+        return;  // Order was recycled
+    }
+
+    if (!is_timer_valid(*os, scheduled_gen)) {
+        ++counters_.stale_timers_skipped;
+        return;
+    }
+
+    // Re-check mismatch at expiration time
+    const MismatchMask mismatch = compute_mismatch(*os);
+    const std::uint64_t now = last_poll_tsc_;  // Use last known time
+
+    if (mismatch.none()) {
+        // Mismatch resolved - false positive avoided
+        os->recon_state = ReconState::Matched;
+        ++counters_.false_positive_avoided;
+        ++counters_.orders_matched;
+    } else if (is_gap_suppressed(*os)) {
+        // Gap still open - suppress and reschedule
+        os->recon_state = ReconState::SuppressedByGap;
+        if (timer_wheel_) {
+            refresh_recon_deadline(*timer_wheel_, *os, now + config_.gap_recheck_period_ns);
+        }
+        ++counters_.gap_suppressions;
+    } else {
+        // Confirmed divergence
+        os->recon_state = ReconState::DivergedConfirmed;
+        emit_confirmed_divergence(*os, mismatch, now);
+        ++counters_.mismatch_confirmed;
+    }
+}
+
+void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch,
+                                           std::uint64_t now_tsc) noexcept {
+    // Check deduplication using free function from order_state.hpp
+    if (!should_emit_divergence(os, mismatch, now_tsc, config_.divergence_dedup_window_ns)) {
+        ++counters_.divergence_deduped;
+        return;
+    }
+
+    // Build and emit divergence event
+    Divergence div{};
+    div.key = os.key;
+    div.type = classify_divergence_type(os, mismatch);
+    div.internal_status = os.internal_status;
+    div.dropcopy_status = os.dropcopy_status;
+    div.internal_cum_qty = os.internal_cum_qty;
+    div.dropcopy_cum_qty = os.dropcopy_cum_qty;
+    div.internal_avg_px = os.internal_avg_px;
+    div.dropcopy_avg_px = os.dropcopy_avg_px;
+    div.internal_ts = os.last_internal_ts;
+    div.dropcopy_ts = os.last_dropcopy_ts;
+    div.detect_tsc = now_tsc;
+    div.mismatch_mask = mismatch.bits();
+
+    if (!divergence_ring_.try_push(div)) {
+        ++counters_.divergence_ring_drops;
+    }
+
+    // Record emission for deduplication
+    record_divergence_emission(os, mismatch, now_tsc);
 }
 
 } // namespace core
