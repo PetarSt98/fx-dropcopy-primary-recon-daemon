@@ -28,6 +28,12 @@ struct SequenceTracker {
     bool gap_open{false};
     std::uint64_t gap_start_seq{0};
     std::uint16_t gap_epoch{0};  // Incremented each time a new gap is detected (FX-7053)
+    
+    // ===== FX-7054: Enhanced gap lifecycle tracking =====
+    std::uint64_t gap_opened_tsc{0};          // When gap was first detected (TSC cycles)
+    std::uint64_t gap_first_missing_seq{0};   // First missing sequence (inclusive)
+    std::uint64_t gap_last_missing_seq{0};    // Last missing sequence (inclusive)
+    std::uint32_t orders_in_gap_uncertainty{0};  // Count of orders affected by this gap
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
@@ -56,16 +62,39 @@ inline bool track_sequence(SequenceTracker& trk,
     if (seq == trk.expected_seq) {
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
+        
+        // FX-7054: Check if gap should close
+        // Gap closes when expected_seq advances past gap_last_missing_seq
+        if (trk.gap_open && trk.expected_seq > trk.gap_last_missing_seq) {
+            trk.gap_open = false;
+            trk.gap_start_seq = 0;
+            trk.gap_opened_tsc = 0;
+            trk.gap_first_missing_seq = 0;
+            trk.gap_last_missing_seq = 0;
+            // Note: gap_epoch and orders_in_gap_uncertainty are preserved (historical)
+        }
+        
         return false;
     }
 
     if (seq > trk.expected_seq) {
         const std::uint64_t expected_before = trk.expected_seq;
-        trk.gap_open = true;
-        trk.gap_start_seq = trk.expected_seq;
+        
+        // Open or extend gap
+        if (!trk.gap_open) {
+            // NEW gap detected
+            trk.gap_open = true;
+            trk.gap_start_seq = trk.expected_seq;
+            trk.gap_opened_tsc = now_ts;  // FX-7054
+            trk.gap_first_missing_seq = trk.expected_seq;  // FX-7054
+            ++trk.gap_epoch;
+        }
+        
+        // Update last missing (gap may be extending)
+        trk.gap_last_missing_seq = seq - 1;  // FX-7054
+        
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
-        ++trk.gap_epoch;  // Increment epoch each time a new gap is detected (FX-7053)
 
         if (out_event) {
             out_event->source = source;

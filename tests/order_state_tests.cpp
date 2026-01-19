@@ -348,4 +348,143 @@ TEST(RecordDivergenceEmissionTest, UpdatesAllFields) {
     EXPECT_EQ(os.divergence_emit_count, 2u);
 }
 
+// ============================================================================
+// FX-7054: Gap Uncertainty Flags Tests
+// ============================================================================
+
+TEST(OrderStateTest, GapUncertaintyFlagsSetClear) {
+    // Test mark/clear functions for gap uncertainty flags
+    core::OrderState os{};
+    core::SequenceTracker trk{};
+    
+    // Initialize tracker and create a gap
+    core::init_sequence_tracker(trk, 1);
+    core::SequenceGapEvent evt{};
+    core::track_sequence(trk, core::Source::Primary, 0, 5, 1000, &evt);  // Create gap
+    ASSERT_TRUE(trk.gap_open);
+    
+    // Initially no flags set
+    EXPECT_EQ(os.gap_uncertainty_flags, 0u);
+    
+    // Mark primary gap uncertainty
+    core::mark_gap_uncertainty(os, core::Source::Primary, trk);
+    EXPECT_EQ(os.gap_uncertainty_flags, core::GapUncertaintyFlags::PRIMARY);
+    EXPECT_EQ(os.gap_suppression_epoch, trk.gap_epoch);
+    
+    // Mark dropcopy gap uncertainty
+    core::mark_gap_uncertainty(os, core::Source::DropCopy, trk);
+    EXPECT_EQ(os.gap_uncertainty_flags, core::GapUncertaintyFlags::PRIMARY | core::GapUncertaintyFlags::DROPCOPY);
+    
+    // Clear primary gap uncertainty
+    core::clear_gap_uncertainty(os, core::Source::Primary);
+    EXPECT_EQ(os.gap_uncertainty_flags, core::GapUncertaintyFlags::DROPCOPY);
+    
+    // Clear dropcopy gap uncertainty
+    core::clear_gap_uncertainty(os, core::Source::DropCopy);
+    EXPECT_EQ(os.gap_uncertainty_flags, 0u);
+}
+
+TEST(OrderStateTest, HasGapUncertaintyDetection) {
+    // Test has_gap_uncertainty() function
+    core::OrderState os{};
+    
+    // Initially no gap uncertainty
+    EXPECT_FALSE(core::has_gap_uncertainty(os));
+    
+    // Set primary flag
+    os.gap_uncertainty_flags = core::GapUncertaintyFlags::PRIMARY;
+    EXPECT_TRUE(core::has_gap_uncertainty(os));
+    
+    // Set dropcopy flag
+    os.gap_uncertainty_flags = core::GapUncertaintyFlags::DROPCOPY;
+    EXPECT_TRUE(core::has_gap_uncertainty(os));
+    
+    // Set both flags
+    os.gap_uncertainty_flags = core::GapUncertaintyFlags::PRIMARY | core::GapUncertaintyFlags::DROPCOPY;
+    EXPECT_TRUE(core::has_gap_uncertainty(os));
+    
+    // Clear all
+    os.gap_uncertainty_flags = 0;
+    EXPECT_FALSE(core::has_gap_uncertainty(os));
+}
+
+TEST(OrderStateTest, GapFlagsPerSourceIndependent) {
+    // Test that Primary and DropCopy flags are independent
+    core::OrderState os{};
+    core::SequenceTracker trk_primary{};
+    core::SequenceTracker trk_dropcopy{};
+    
+    // Initialize both trackers
+    core::init_sequence_tracker(trk_primary, 1);
+    core::init_sequence_tracker(trk_dropcopy, 1);
+    
+    // Create gaps in both trackers
+    core::SequenceGapEvent evt{};
+    core::track_sequence(trk_primary, core::Source::Primary, 0, 5, 1000, &evt);
+    core::track_sequence(trk_dropcopy, core::Source::DropCopy, 1, 5, 1000, &evt);
+    
+    ASSERT_TRUE(trk_primary.gap_open);
+    ASSERT_TRUE(trk_dropcopy.gap_open);
+    
+    // Mark only primary
+    core::mark_gap_uncertainty(os, core::Source::Primary, trk_primary);
+    EXPECT_TRUE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::PRIMARY);
+    EXPECT_FALSE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::DROPCOPY);
+    
+    // Mark dropcopy - primary should still be set
+    core::mark_gap_uncertainty(os, core::Source::DropCopy, trk_dropcopy);
+    EXPECT_TRUE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::PRIMARY);
+    EXPECT_TRUE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::DROPCOPY);
+    
+    // Clear primary - dropcopy should still be set
+    core::clear_gap_uncertainty(os, core::Source::Primary);
+    EXPECT_FALSE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::PRIMARY);
+    EXPECT_TRUE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::DROPCOPY);
+    
+    // Clear dropcopy - both should be unset
+    core::clear_gap_uncertainty(os, core::Source::DropCopy);
+    EXPECT_FALSE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::PRIMARY);
+    EXPECT_FALSE(os.gap_uncertainty_flags & core::GapUncertaintyFlags::DROPCOPY);
+    EXPECT_EQ(os.gap_uncertainty_flags, 0u);
+}
+
+TEST(OrderStateTest, ClearAllGapUncertainty) {
+    // Test clear_all_gap_uncertainty() function
+    core::OrderState os{};
+    
+    // Set both flags and epoch
+    os.gap_uncertainty_flags = core::GapUncertaintyFlags::PRIMARY | core::GapUncertaintyFlags::DROPCOPY;
+    os.gap_suppression_epoch = 5;
+    
+    // Clear all
+    core::clear_all_gap_uncertainty(os);
+    
+    EXPECT_EQ(os.gap_uncertainty_flags, 0u);
+    EXPECT_EQ(os.gap_suppression_epoch, 0u);
+}
+
+TEST(OrderStateTest, MarkGapUncertaintyNoOpWhenGapClosed) {
+    // Test that mark_gap_uncertainty does nothing when gap is closed
+    core::OrderState os{};
+    core::SequenceTracker trk{};
+    
+    // Initialize tracker but no gap
+    core::init_sequence_tracker(trk, 1);
+    ASSERT_FALSE(trk.gap_open);
+    
+    // Try to mark gap uncertainty - should be no-op
+    core::mark_gap_uncertainty(os, core::Source::Primary, trk);
+    EXPECT_EQ(os.gap_uncertainty_flags, 0u);
+    EXPECT_EQ(os.gap_suppression_epoch, 0u);
+}
+
+TEST(OrderStateTest, GapUncertaintyFlagsInitialization) {
+    // Verify gap_uncertainty_flags is initialized to 0
+    util::Arena arena(1024);
+    core::OrderState* state = core::create_order_state(arena, 42);
+    ASSERT_NE(state, nullptr);
+    
+    EXPECT_EQ(state->gap_uncertainty_flags, 0u);
+}
+
 } // namespace

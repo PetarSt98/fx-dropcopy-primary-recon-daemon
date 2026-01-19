@@ -141,6 +141,12 @@ if(NOT aeron_FOUND)
     list(PREPEND AERON_INCLUDE_DIRS "${AERON_SHIM_DIR}")
     endif()
 
+  # FX-7054: Add nested include path for Aeron headers that use relative includes
+  # (e.g., #include "concurrent/AtomicBuffer.h")
+  if(EXISTS "${AERON_INCLUDE_DIR}/aeron")
+    list(APPEND AERON_INCLUDE_DIRS "${AERON_INCLUDE_DIR}/aeron")
+  endif()
+
   # Prove the include path is usable before the main build to avoid late failures.
   set(_AERON_TRY_FLAGS "")
   foreach(_inc IN LISTS _AERON_INCLUDE_DIRS)
