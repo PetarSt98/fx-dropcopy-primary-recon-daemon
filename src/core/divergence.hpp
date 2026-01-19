@@ -9,11 +9,11 @@ namespace core {
 
 enum class DivergenceType : std::uint8_t {
     MissingFill,      // DropCopy filled/partial, internal not reflecting it
-    MissingDropCopy,  // Internal seen but no dropcopy (FX-7053)
     PhantomOrder,     // DropCopy has order, internal has no record
     StateMismatch,    // OrdStatus mismatch (e.g. Filled vs Working)
     QuantityMismatch, // CumQty/AvgPx mismatch beyond tolerance
-    TimingAnomaly     // DropCopy significantly earlier than internal
+    TimingAnomaly,    // DropCopy significantly earlier than internal
+    MissingDropCopy   // Internal seen but no dropcopy (FX-7053)
 };
 
 struct Divergence {
