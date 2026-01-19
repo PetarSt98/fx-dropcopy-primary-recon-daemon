@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "core/order_state.hpp"
+#include "util/tsc_calibration.hpp"
 
 namespace {
 
@@ -264,12 +265,18 @@ TEST(ShouldEmitDivergenceTest, SameMismatchWithinWindow_ReturnsFalse) {
     core::MismatchMask mismatch{};
     mismatch.set(core::MismatchMask::STATUS);
 
+    // Use TSC-consistent values
+    // dedup_window_ns = 1 second = 1'000'000'000 ns
+    // dedup_window_tsc = ns_to_tsc(1s) = 3 billion cycles (at 3GHz)
+    const std::uint64_t dedup_window_ns = 1'000'000'000;
+    const std::uint64_t dedup_window_tsc = util::ns_to_tsc(dedup_window_ns);
+    
     // Simulate a previous emission
     os.last_divergence_emit_tsc = 1000;
     os.last_emitted_mismatch = mismatch;
 
-    // Same mismatch within dedup window (500 tsc < 1 second window)
-    EXPECT_FALSE(core::should_emit_divergence(os, mismatch, 1500, 1'000'000'000));
+    // Same mismatch within dedup window (500 cycles << 3 billion cycles)
+    EXPECT_FALSE(core::should_emit_divergence(os, mismatch, 1500, dedup_window_ns));
 }
 
 TEST(ShouldEmitDivergenceTest, SameMismatchAfterWindow_ReturnsTrue) {
@@ -277,13 +284,16 @@ TEST(ShouldEmitDivergenceTest, SameMismatchAfterWindow_ReturnsTrue) {
     core::MismatchMask mismatch{};
     mismatch.set(core::MismatchMask::STATUS);
 
+    // Use TSC-consistent values
+    const std::uint64_t dedup_window_ns = 1'000'000'000;
+    const std::uint64_t dedup_window_tsc = util::ns_to_tsc(dedup_window_ns);
+    
     // Simulate a previous emission
     os.last_divergence_emit_tsc = 1000;
     os.last_emitted_mismatch = mismatch;
 
-    // Same mismatch after window expires
-    std::uint64_t dedup_window = 1'000'000'000;
-    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000 + dedup_window, dedup_window));
+    // Same mismatch after window expires (TSC elapsed >= converted window)
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000 + dedup_window_tsc, dedup_window_ns));
 }
 
 TEST(ShouldEmitDivergenceTest, DifferentMismatch_ReturnsTrue) {

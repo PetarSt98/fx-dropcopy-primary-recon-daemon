@@ -27,6 +27,7 @@ struct SequenceTracker {
     bool initialized{false};
     bool gap_open{false};
     std::uint64_t gap_start_seq{0};
+    std::uint16_t gap_epoch{0};  // Incremented each time a new gap is detected (FX-7053)
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
@@ -64,6 +65,7 @@ inline bool track_sequence(SequenceTracker& trk,
         trk.gap_start_seq = trk.expected_seq;
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
+        ++trk.gap_epoch;  // Increment epoch each time a new gap is detected (FX-7053)
 
         if (out_event) {
             out_event->source = source;

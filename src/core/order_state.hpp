@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 #include <cassert>
@@ -9,6 +10,7 @@
 #include "core/order_lifecycle.hpp"
 #include "core/recon_state.hpp"
 #include "util/arena.hpp"
+#include "util/tsc_calibration.hpp"
 
 namespace core {
 
@@ -64,7 +66,7 @@ struct OrderState {
     MismatchMask current_mismatch{};      // 1-byte mask
 
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
-    std::uint8_t gap_suppression_epoch{0};
+    std::uint16_t gap_suppression_epoch{0};  // Upgraded to uint16_t to avoid wrap-around issues
 
     // ===== Divergence emission tracking (FX-7053) =====
     // These fields support idempotent divergence emission to avoid flooding
@@ -196,9 +198,62 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     return m;
 }
 
+// Mismatch computation with tolerance parameters (FX-7053 Part 3).
+// Tolerances allow for minor differences without triggering mismatches.
+[[nodiscard]] inline MismatchMask compute_mismatch(
+    const OrderState& os,
+    std::int64_t qty_tolerance,
+    std::int64_t px_tolerance
+) noexcept {
+    MismatchMask m{};
+
+    // Existence mismatch: if one side seen but not the other
+    if (os.seen_internal != os.seen_dropcopy) {
+        m.set(MismatchMask::EXISTENCE);
+        return m;  // Early return on existence mismatch
+    }
+
+    // If neither side seen, return empty mask
+    if (!os.seen_internal && !os.seen_dropcopy) {
+        return m;
+    }
+
+    // Both sides seen: compare fields
+
+    // Status mismatch (no tolerance for status)
+    if (os.internal_status != os.dropcopy_status) {
+        m.set(MismatchMask::STATUS);
+    }
+
+    // CumQty mismatch with tolerance
+    const auto qty_diff = std::llabs(os.internal_cum_qty - os.dropcopy_cum_qty);
+    if (qty_diff > qty_tolerance) {
+        m.set(MismatchMask::CUM_QTY);
+    }
+
+    // AvgPx mismatch with tolerance
+    const auto px_diff = std::llabs(os.internal_avg_px - os.dropcopy_avg_px);
+    if (px_diff > px_tolerance) {
+        m.set(MismatchMask::AVG_PX);
+    }
+
+    // ExecID mismatch: compare lengths first, then content if both are populated
+    if (os.last_internal_exec_id_len != os.last_dropcopy_exec_id_len) {
+        m.set(MismatchMask::EXEC_ID);
+    } else if (os.last_internal_exec_id_len > 0 && os.last_dropcopy_exec_id_len > 0) {
+        if (std::memcmp(os.last_internal_exec_id, os.last_dropcopy_exec_id, 
+                        os.last_internal_exec_id_len) != 0) {
+            m.set(MismatchMask::EXEC_ID);
+        }
+    }
+
+    return m;
+}
+
 // Check if a divergence should be emitted or deduplicated.
 // Returns true if enough time has passed since last emission with same mismatch.
 // Returns false if this would be a duplicate (suppress emission).
+// Note: dedup_window_ns is in nanoseconds but now_tsc is in TSC cycles
 [[nodiscard]] inline bool should_emit_divergence(
     const OrderState& os,
     MismatchMask current_mismatch,
@@ -220,7 +275,9 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     if (now_tsc < os.last_divergence_emit_tsc) {
         return true;  // Emit to be safe on clock anomaly
     }
-    return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_ns;
+    // Convert nanoseconds window to TSC cycles for correct comparison
+    const std::uint64_t dedup_window_tsc = util::ns_to_tsc(dedup_window_ns);
+    return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_tsc;
 }
 
 // Record that a divergence was emitted.
