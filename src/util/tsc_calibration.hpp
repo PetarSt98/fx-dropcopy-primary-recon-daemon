@@ -45,7 +45,7 @@ public:
     static constexpr std::uint64_t FRAC_SCALE = 1ULL << FRAC_BITS;
 
     // Get singleton instance (thread-safe initialization in C++11+)
-    // Automatically calibrates on first access
+    // NOTE: Does NOT auto-calibrate. Call calibrate_blocking() during startup.
     static TscCalibration& instance() noexcept {
         static TscCalibration inst;
         return inst;
@@ -221,6 +221,19 @@ public:
         }
     }
 
+    // Explicit calibration method for startup (NOT in hot path!)
+    // Call this during application initialization before any timing-critical code
+    // Blocks for ~duration_ms to measure TSC frequency
+    void calibrate_blocking(std::uint64_t duration_ms = 100) noexcept {
+        if (has_invariant_tsc()) {
+            calibrate(duration_ms);
+        } else {
+            std::fprintf(stderr, "[TscCalibration] WARNING: Invariant TSC not detected. "
+                                 "Using default frequency: %lu Hz\n",
+                         static_cast<unsigned long>(DEFAULT_TSC_FREQ_HZ));
+        }
+    }
+
 private:
     TscCalibration() noexcept 
         : tsc_freq_hz_(DEFAULT_TSC_FREQ_HZ)
@@ -228,18 +241,10 @@ private:
         , ns_per_cycle_q32_(0)
         , calibrated_(false)
     {
-        // Initialize with default frequency
+        // Initialize with default frequency only - NO BLOCKING!
+        // Calibration must be called explicitly via calibrate_blocking()
+        // during application startup (not in hot path)
         set_tsc_freq_hz(DEFAULT_TSC_FREQ_HZ);
-        
-        // Perform runtime calibration
-        // Note: calibrate() uses nanosleep which is acceptable during startup
-        if (has_invariant_tsc()) {
-            calibrate(100);  // 100ms calibration duration
-        } else {
-            std::fprintf(stderr, "[TscCalibration] WARNING: Invariant TSC not detected. "
-                                 "Using default frequency: %lu Hz\n",
-                         static_cast<unsigned long>(DEFAULT_TSC_FREQ_HZ));
-        }
     }
 
     std::uint64_t tsc_freq_hz_;           // TSC frequency in Hz
