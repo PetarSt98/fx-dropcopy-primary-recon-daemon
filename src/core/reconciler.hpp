@@ -49,6 +49,7 @@ struct ReconCounters {
     std::uint64_t stale_timers_skipped{0};    // Timer callbacks skipped (generation mismatch)
     std::uint64_t gap_suppressions{0};        // Divergences suppressed due to open sequence gaps
     std::uint64_t timer_overflow{0};          // Timer wheel bucket overflow events (FX-7053 Part 3)
+    std::uint64_t divergence_resolved{0};     // Confirmed divergences that later resolved
 };
 
 // Default deduplication window: don't re-emit identical divergence within this period.

@@ -225,10 +225,12 @@ void Reconciler::run() {
             });
         }
 
-        // Backoff when idle - use CPU pause instruction for HFT compliance
+        // Backoff when idle - exponential backoff reduces CPU burn
         if (!consumed) {
-            if (backoff < 64) {
-                ++backoff;
+            if (backoff == 0) {
+                backoff = 1;
+            } else if (backoff < 256) {
+                backoff <<= 1;  // Exponential: 1,2,4,8,16,32,64,128,256
             }
             // Execute pause instructions proportional to backoff level
             // This reduces CPU power while maintaining low-latency wake-up
@@ -439,7 +441,7 @@ void Reconciler::handle_recon_state_transition(
             if (new_mismatch.none()) {
                 // Divergence resolved - return to matched
                 os.recon_state = ReconState::Matched;
-                ++counters_.orders_matched;
+                ++counters_.divergence_resolved;
             }
             break;
 
