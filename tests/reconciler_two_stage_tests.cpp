@@ -226,10 +226,11 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_SkipsStaleTimer) {
 // Reconciler_NewConstructor_WithNullTimerWheel - Works with nullptr timer wheel
 TEST_F(ReconcilerTwoStageTest, NewConstructorWithNullTimerWheel) {
     std::atomic<bool> stop_flag{false};
-    ExecRing primary_ring;
-    ExecRing dropcopy_ring;
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
+    // Allocate large ring buffers on heap to avoid stack overflow
+    auto primary_ring = std::make_unique<ExecRing>();
+    auto dropcopy_ring = std::make_unique<ExecRing>();
+    auto divergence_ring = std::make_unique<core::DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<core::SequenceGapRing>();
     util::Arena arena{util::Arena::default_capacity_bytes};
     core::OrderStateStore store{arena, 128};
     core::ReconCounters counters{};
@@ -238,12 +239,12 @@ TEST_F(ReconcilerTwoStageTest, NewConstructorWithNullTimerWheel) {
     // Create reconciler with nullptr timer wheel
     core::Reconciler reconciler(
         stop_flag,
-        primary_ring,
-        dropcopy_ring,
+        *primary_ring,
+        *dropcopy_ring,
         store,
         counters,
-        divergence_ring,
-        seq_gap_ring,
+        *divergence_ring,
+        *seq_gap_ring,
         nullptr,  // No timer wheel
         config);
 
@@ -254,10 +255,11 @@ TEST_F(ReconcilerTwoStageTest, NewConstructorWithNullTimerWheel) {
 // Reconciler_BackwardCompatibility - Old constructor still works
 TEST_F(ReconcilerTwoStageTest, BackwardCompatibility) {
     std::atomic<bool> stop_flag{false};
-    ExecRing primary_ring;
-    ExecRing dropcopy_ring;
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
+    // Allocate large ring buffers on heap to avoid stack overflow
+    auto primary_ring = std::make_unique<ExecRing>();
+    auto dropcopy_ring = std::make_unique<ExecRing>();
+    auto divergence_ring = std::make_unique<core::DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<core::SequenceGapRing>();
     util::Arena arena{util::Arena::default_capacity_bytes};
     core::OrderStateStore store{arena, 128};
     core::ReconCounters counters{};
@@ -265,12 +267,12 @@ TEST_F(ReconcilerTwoStageTest, BackwardCompatibility) {
     // Use old constructor (backward compatibility)
     core::Reconciler reconciler(
         stop_flag,
-        primary_ring,
-        dropcopy_ring,
+        *primary_ring,
+        *dropcopy_ring,
         store,
         counters,
-        divergence_ring,
-        seq_gap_ring);
+        *divergence_ring,
+        *seq_gap_ring);
 
     // Should compile and construct without issues
     SUCCEED();
