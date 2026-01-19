@@ -73,7 +73,13 @@ static constexpr std::uint64_t DEFAULT_DIVERGENCE_DEDUP_WINDOW_NS = 1'000'000'00
     if (mismatch.has(MismatchMask::CUM_QTY)) {
         return DivergenceType::QuantityMismatch;
     }
-    return DivergenceType::StateMismatch;  // Default
+    // Price and execution-id mismatches are treated as state-related discrepancies.
+    if (mismatch.has(MismatchMask::AVG_PX) || mismatch.has(MismatchMask::EXEC_ID)) {
+        return DivergenceType::StateMismatch;
+    }
+    // Catch-all: any other mismatch bits not explicitly mapped above are classified
+    // as state-related mismatches.
+    return DivergenceType::StateMismatch;
 }
 
 class Reconciler {
