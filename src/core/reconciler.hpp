@@ -5,10 +5,13 @@
 #include <cstdint>
 
 #include "core/order_state_store.hpp"
+#include "core/recon_config.hpp"
+#include "core/recon_timer.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "core/exec_event.hpp"
 #include "core/divergence.hpp"
 #include "core/sequence_tracker.hpp"
+#include "util/wheel_timer.hpp"
 
 namespace core {
 
@@ -52,8 +55,30 @@ struct ReconCounters {
 // Note: This may become configurable in future (FX-7200).
 static constexpr std::uint64_t DEFAULT_DIVERGENCE_DEDUP_WINDOW_NS = 1'000'000'000;  // 1 second
 
+// Classify divergence type based on order state and mismatch mask (FX-7053)
+[[nodiscard]] inline DivergenceType classify_divergence_type(
+    const OrderState& os,
+    MismatchMask mismatch
+) noexcept {
+    if (mismatch.has(MismatchMask::EXISTENCE)) {
+        if (os.seen_internal && !os.seen_dropcopy) {
+            return DivergenceType::MissingDropCopy;
+        } else {
+            return DivergenceType::PhantomOrder;
+        }
+    }
+    if (mismatch.has(MismatchMask::STATUS)) {
+        return DivergenceType::StateMismatch;
+    }
+    if (mismatch.has(MismatchMask::CUM_QTY)) {
+        return DivergenceType::QuantityMismatch;
+    }
+    return DivergenceType::StateMismatch;  // Default
+}
+
 class Reconciler {
 public:
+    // Existing constructor (backward compatibility)
     Reconciler(std::atomic<bool>& stop_flag,
                ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
                ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
@@ -62,8 +87,47 @@ public:
                DivergenceRing& divergence_ring,
                SequenceGapRing& seq_gap_ring) noexcept;
 
+    // New constructor with timer wheel and config (FX-7053)
+    Reconciler(std::atomic<bool>& stop_flag,
+               ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
+               ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
+               OrderStateStore& store,
+               ReconCounters& counters,
+               DivergenceRing& divergence_ring,
+               SequenceGapRing& seq_gap_ring,
+               util::WheelTimer* timer_wheel,  // nullptr = disable windowed recon
+               const ReconConfig& config = default_recon_config()) noexcept;
+
     void run();
     void process_event_for_test(const ExecEvent& ev) noexcept { process_event(ev); }
+
+    // ===== Two-stage pipeline helpers (FX-7053) =====
+
+    // Check if both primary and dropcopy have been seen for an order
+    [[nodiscard]] static bool both_sides_seen(const OrderState& os) noexcept {
+        return os.seen_internal && os.seen_dropcopy;
+    }
+
+    // Check if divergence should be suppressed due to sequence gap
+    [[nodiscard]] bool is_gap_suppressed(const OrderState& os) const noexcept;
+
+    // Enter grace period for an order with detected mismatch
+    void enter_grace_period(OrderState& os, MismatchMask mismatch, std::uint64_t now_tsc) noexcept;
+
+    // Exit grace period (mismatch resolved before deadline)
+    void exit_grace_period(OrderState& os, std::uint64_t now_tsc) noexcept;
+
+    // Handle timer expiration callback from wheel
+    void on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen) noexcept;
+
+    // Emit confirmed divergence (with deduplication check)
+    // Uses the free function should_emit_divergence() from order_state.hpp
+    void emit_confirmed_divergence(OrderState& os,
+                                   MismatchMask mismatch,
+                                   std::uint64_t now_tsc) noexcept;
+
+    // Accessor for last poll TSC (used by tests)
+    [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
 
 private:
     void process_event(const ExecEvent& ev) noexcept;
@@ -83,6 +147,11 @@ private:
 
     SequenceTracker primary_seq_tracker_{};
     SequenceTracker dropcopy_seq_tracker_{};
+
+    // ===== New members (FX-7053) =====
+    util::WheelTimer* timer_wheel_{nullptr};  // Optional, nullptr if windowed recon disabled
+    ReconConfig config_{};
+    std::uint64_t last_poll_tsc_{0};  // Last poll timestamp for deadline processing
 };
 
 } // namespace core

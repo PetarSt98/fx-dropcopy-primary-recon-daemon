@@ -8,11 +8,12 @@
 namespace core {
 
 enum class DivergenceType : std::uint8_t {
-    MissingFill,     // DropCopy filled/partial, internal not reflecting it
-    PhantomOrder,    // DropCopy has order, internal has no record
-    StateMismatch,   // OrdStatus mismatch (e.g. Filled vs Working)
-    QuantityMismatch,// CumQty/AvgPx mismatch beyond tolerance
-    TimingAnomaly    // DropCopy significantly earlier than internal
+    MissingFill,      // DropCopy filled/partial, internal not reflecting it
+    MissingDropCopy,  // Internal seen but no dropcopy (FX-7053)
+    PhantomOrder,     // DropCopy has order, internal has no record
+    StateMismatch,    // OrdStatus mismatch (e.g. Filled vs Working)
+    QuantityMismatch, // CumQty/AvgPx mismatch beyond tolerance
+    TimingAnomaly     // DropCopy significantly earlier than internal
 };
 
 struct Divergence {
@@ -26,6 +27,8 @@ struct Divergence {
     std::int64_t dropcopy_avg_px{0};
     std::uint64_t internal_ts{0};
     std::uint64_t dropcopy_ts{0};
+    std::uint64_t detect_tsc{0};      // TSC when divergence was detected (FX-7053)
+    std::uint8_t mismatch_mask{0};    // MismatchMask bits at detection time (FX-7053)
 };
 
 inline void fill_divergence_snapshot(const OrderState& state,
