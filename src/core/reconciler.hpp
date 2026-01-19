@@ -121,7 +121,7 @@ public:
     void on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen) noexcept;
 
     // Emit confirmed divergence (with deduplication check)
-    // Uses the free function should_emit_divergence() from order_state.hpp
+    // Uses the inline function should_emit_divergence() from order_state.hpp
     void emit_confirmed_divergence(OrderState& os,
                                    MismatchMask mismatch,
                                    std::uint64_t now_tsc) noexcept;
