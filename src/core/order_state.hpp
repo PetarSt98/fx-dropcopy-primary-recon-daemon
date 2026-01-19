@@ -324,7 +324,7 @@ inline void mark_gap_uncertainty(
     }
     
     // Track the maximum epoch across all sources (FX-7054)
-    if (os.gap_suppression_epoch < tracker. gap_epoch) {
+    if (os.gap_suppression_epoch < tracker.gap_epoch) {
         os.gap_suppression_epoch = tracker.gap_epoch;
     }
 }
