@@ -120,7 +120,7 @@ inline bool track_sequence(SequenceTracker& trk,
         out_event->seen_seq = seq;
         if (is_duplicate) {
             out_event->kind = GapKind::Duplicate;
-        } else if (gap_filled) {
+        } else if (gap_closed_by_fill) {
             out_event->kind = GapKind::GapFill;
         } else {
             out_event->kind = GapKind::OutOfOrder;
