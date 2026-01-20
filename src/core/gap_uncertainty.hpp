@@ -148,9 +148,19 @@ inline void mark_gap_uncertainty(
         return false;
     }
     
-    // Verify epoch matches to handle gap closure/reopen scenarios
-    // Order must be marked with the CURRENT gap's epoch to be suppressed
-    return os.gap_suppression_epoch == tracker.gap_epoch;
+    // Verify epoch matches to handle gap closure/reopen scenarios.
+    // The order must be marked with the CURRENT gap's epoch for the
+    // specific source to be suppressed.
+    std::uint64_t order_epoch = 0;
+    switch (source) {
+        case Source::Primary:
+            order_epoch = os.primary_gap_epoch;
+            break;
+        case Source::DropCopy:
+            order_epoch = os.dropcopy_gap_epoch;
+            break;
+    }
+    return order_epoch == tracker.gap_epoch;
 }
 
 } // namespace core
