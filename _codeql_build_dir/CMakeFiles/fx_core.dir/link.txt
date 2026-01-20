@@ -1,2 +1,0 @@
-/usr/bin/ar qc libfx_core.a CMakeFiles/fx_core.dir/src/ingest/fix_parser.cpp.o CMakeFiles/fx_core.dir/src/core/order_state_store.cpp.o CMakeFiles/fx_core.dir/src/core/reconciler.cpp.o CMakeFiles/fx_core.dir/src/util/async_log.cpp.o
-/usr/bin/ranlib libfx_core.a
