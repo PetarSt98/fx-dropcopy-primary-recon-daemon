@@ -172,16 +172,16 @@ TEST(SequenceTrackerTest, CloseGap_ClearsFields) {
     EXPECT_EQ(trk.gap_start_seq, 0u);
     EXPECT_EQ(trk.gap_opened_tsc, 0u);
     EXPECT_EQ(trk.gap_last_missing_seq, 0u);
+    EXPECT_EQ(trk.orders_in_gap_count, 0u);  // Count reset to prevent corruption
 
-    // Verify preserved fields
-    EXPECT_EQ(trk.gap_epoch, 1u);               // Epoch preserved
-    EXPECT_EQ(trk.orders_in_gap_count, 3u);     // Count preserved
+    // Verify epoch preserved for historical tracking
+    EXPECT_EQ(trk.gap_epoch, 1u);
 
     // Verify double-close returns false
     EXPECT_FALSE(core::close_gap(trk));
 }
 
-TEST(SequenceTrackerTest, OrdersInGapCount_PreservedAcrossLifecycle) {
+TEST(SequenceTrackerTest, OrdersInGapCount_ResetOnGapClose) {
     core::SequenceTracker trk{};
     core::SequenceGapEvent evt{};
     ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
@@ -192,13 +192,11 @@ TEST(SequenceTrackerTest, OrdersInGapCount_PreservedAcrossLifecycle) {
     // Simulate marking some orders
     trk.orders_in_gap_count = 5;
 
-    // Close gap
+    // Close gap - count should be reset to prevent corruption
     core::close_gap(trk);
+    EXPECT_EQ(trk.orders_in_gap_count, 0u);
 
-    // Verify count preserved
-    EXPECT_EQ(trk.orders_in_gap_count, 5u);
-
-    // Create new gap - count should be reset
+    // Create new gap - count starts at 0 (no double-reset issue)
     EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 10, 2000, &evt));
     EXPECT_EQ(trk.orders_in_gap_count, 0u);
 }

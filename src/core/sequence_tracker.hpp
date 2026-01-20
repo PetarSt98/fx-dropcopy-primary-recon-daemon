@@ -44,6 +44,7 @@ inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq)
     trk.expected_seq = first_seq + 1;
     trk.gap_open = false;
     trk.gap_start_seq = 0;
+    trk.gap_epoch = 0;  // FX-7054: Explicit reset for consistency
     // FX-7054: Initialize new gap lifecycle fields
     trk.gap_opened_tsc = 0;
     trk.gap_last_missing_seq = 0;
@@ -118,6 +119,10 @@ inline bool track_sequence(SequenceTracker& trk,
 // Returns true if gap was open, false if already closed.
 // Rationale: Gap closure should be **explicit** (timeout or admin action), not automatic.
 // In FX, gaps often resolve administratively, not by receiving missing messages.
+//
+// IMPORTANT: This resets orders_in_gap_count to 0 to prevent counter corruption.
+// Orders with flags from this gap should have their flags cleared BEFORE calling
+// close_gap(), or use clear_gap_uncertainty() with tracker=nullptr for cleanup.
 inline bool close_gap(SequenceTracker& trk) noexcept {
     if (!trk.gap_open) {
         return false;
@@ -127,7 +132,8 @@ inline bool close_gap(SequenceTracker& trk) noexcept {
     trk.gap_start_seq = 0;
     trk.gap_opened_tsc = 0;
     trk.gap_last_missing_seq = 0;
-    // Note: gap_epoch and orders_in_gap_count preserved (historical record)
+    trk.orders_in_gap_count = 0;  // Reset to prevent corruption on next gap
+    // Note: gap_epoch preserved for historical tracking
 
     return true;
 }
