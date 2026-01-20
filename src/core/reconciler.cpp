@@ -116,6 +116,11 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
             break;
         }
 
+        // Increment counter if gap was closed by fill
+        if (gap_ev.gap_closed_by_fill) {
+            ++counters_.gaps_closed_by_fill;
+        }
+
         if (!seq_gap_ring_.try_push(gap_ev)) {
             ++counters_.sequence_gap_ring_drops;
             LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
