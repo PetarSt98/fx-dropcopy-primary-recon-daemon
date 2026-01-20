@@ -9,7 +9,8 @@ namespace core {
 enum class GapKind : std::uint8_t {
     Gap,
     Duplicate,
-    OutOfOrder
+    OutOfOrder,
+    GapFill  // Out-of-order message that fills/closes a gap
 };
 
 struct SequenceGapEvent {
@@ -117,7 +118,13 @@ inline bool track_sequence(SequenceTracker& trk,
         out_event->session_id = session_id;
         out_event->expected_seq = trk.expected_seq;
         out_event->seen_seq = seq;
-        out_event->kind = is_duplicate ? GapKind::Duplicate : GapKind::OutOfOrder;
+        if (is_duplicate) {
+            out_event->kind = GapKind::Duplicate;
+        } else if (gap_filled) {
+            out_event->kind = GapKind::GapFill;
+        } else {
+            out_event->kind = GapKind::OutOfOrder;
+        }
         out_event->detect_ts = now_ts;
         out_event->gap_closed_by_fill = gap_closed_by_fill;
     }

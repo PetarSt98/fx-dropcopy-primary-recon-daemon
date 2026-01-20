@@ -983,6 +983,7 @@ TEST_F(ReconcilerWindowedTest, GapClosesOnOutOfOrderMessage) {
 
     // Gap should be closed by the out-of-order message
     EXPECT_EQ(counters_.dropcopy_seq_out_of_order, 1u);
+    EXPECT_EQ(counters_.gaps_closed_by_fill, 1u);
     // The sequence tracker's gap_open should now be false (gap closed)
 }
 
