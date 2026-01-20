@@ -796,7 +796,8 @@ TEST_F(ReconcilerWindowedTest, Matched_ReentersGrace_OnNewMismatch) {
 
     // Should re-enter grace
     EXPECT_EQ(os->recon_state, ReconState::InGrace);
-    EXPECT_EQ(counters_.mismatch_observed, 1u);
+    // mismatch_observed=2: first for EXISTENCE (primary only), second for CUM_QTY mismatch
+    EXPECT_EQ(counters_.mismatch_observed, 2u);
 }
 
 // Test: Timer wheel stats are tracked

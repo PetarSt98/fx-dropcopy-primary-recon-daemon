@@ -358,7 +358,8 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_PrimaryThenDropcopy_Matched) {
     core::OrderKey key = core::make_order_key(primary_ev);
     core::OrderState* os = h.store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, core::ReconState::AwaitingDropCopy);
+    // Note: With FX-7053, one-sided orders enter InGrace (EXISTENCE mismatch)
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
 
     // Send matching dropcopy event
     auto dropcopy_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 100, ts + 1, "ORDER1", "EX1");
@@ -366,10 +367,12 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_PrimaryThenDropcopy_Matched) {
 
     EXPECT_EQ(os->recon_state, core::ReconState::Matched);
     EXPECT_EQ(h.counters.orders_matched, 1u);
-    EXPECT_EQ(h.counters.mismatch_observed, 0u);
+    // mismatch_observed=1 for EXISTENCE mismatch when primary arrived first
+    EXPECT_EQ(h.counters.mismatch_observed, 1u);
+    EXPECT_EQ(h.counters.false_positive_avoided, 1u);
 }
 
-// 2. TwoStage_PrimaryOnly_AwaitingDropcopy - State stays AwaitingDropCopy
+// 2. TwoStage_PrimaryOnly_InGrace - State enters InGrace (EXISTENCE mismatch)
 TEST_F(ReconcilerTwoStageTest, TwoStage_PrimaryOnly_AwaitingDropcopy) {
     TwoStageHarness h;
     const std::uint64_t ts = 1'000'000'000;
@@ -381,12 +384,14 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_PrimaryOnly_AwaitingDropcopy) {
     core::OrderKey key = core::make_order_key(primary_ev);
     core::OrderState* os = h.store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, core::ReconState::AwaitingDropCopy);
+    // Note: With FX-7053, one-sided orders enter InGrace (EXISTENCE mismatch)
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
     EXPECT_TRUE(os->seen_internal);
     EXPECT_FALSE(os->seen_dropcopy);
+    EXPECT_EQ(h.counters.mismatch_observed, 1u);
 }
 
-// 3. TwoStage_DropcopyOnly_AwaitingPrimary - State stays AwaitingPrimary
+// 3. TwoStage_DropcopyOnly_InGrace - State enters InGrace (EXISTENCE mismatch)
 TEST_F(ReconcilerTwoStageTest, TwoStage_DropcopyOnly_AwaitingPrimary) {
     TwoStageHarness h;
     const std::uint64_t ts = 1'000'000'000;
@@ -398,9 +403,11 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_DropcopyOnly_AwaitingPrimary) {
     core::OrderKey key = core::make_order_key(dropcopy_ev);
     core::OrderState* os = h.store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, core::ReconState::AwaitingPrimary);
+    // Note: With FX-7053, one-sided orders enter InGrace (EXISTENCE mismatch)
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
     EXPECT_FALSE(os->seen_internal);
     EXPECT_TRUE(os->seen_dropcopy);
+    EXPECT_EQ(h.counters.mismatch_observed, 1u);
 }
 
 // 4. TwoStage_MismatchDetected_EntersGrace - Mismatch triggers InGrace state
@@ -521,7 +528,8 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_MatchedThenMismatch_ReentersGrace) {
     h.reconciler->process_event_for_test(primary_ev2);
 
     EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
-    EXPECT_EQ(h.counters.mismatch_observed, 1u);
+    // mismatch_observed=2: first for EXISTENCE (primary only), second for CUM_QTY mismatch
+    EXPECT_EQ(h.counters.mismatch_observed, 2u);
 }
 
 // 9. TwoStage_DivergedThenResolved_ReturnsToMatched - Recovery from diverged state

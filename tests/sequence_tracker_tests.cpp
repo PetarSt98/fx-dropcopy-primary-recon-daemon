@@ -106,9 +106,11 @@ TEST(SequenceTrackerTest, GapNotClosedByDuplicate) {
     // Create a gap: receive seq 5 (gap: 3, 4)
     EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 5, 100, &evt));
     EXPECT_TRUE(trk.gap_open);
+    // After seq 5: last_seen_seq=5, gap_start_seq=3, gap_end_seq=5
     
-    // Receive duplicate of seq 2 (should not close gap)
-    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 2, 200, &evt));
+    // Receive duplicate of seq 5 (last_seen_seq) - should not close gap
+    // Note: Duplicate means seq == last_seen_seq, so we send 5 again
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 5, 200, &evt));
     EXPECT_EQ(evt.kind, core::GapKind::Duplicate);
     EXPECT_FALSE(evt.gap_closed_by_fill);  // Duplicate should not close gap
     EXPECT_TRUE(trk.gap_open);  // Gap should still be open
