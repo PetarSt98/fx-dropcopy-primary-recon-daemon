@@ -396,7 +396,12 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
     record_divergence_emission(os, mismatch, now_tsc);
     
     // FX-7054: Clear gap uncertainty after confirmed divergence
-    clear_gap_uncertainty(os);
+    if (has_gap_uncertainty_for(os, Source::Primary)) {
+        clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
+    }
+    if (has_gap_uncertainty_for(os, Source::DropCopy)) {
+        clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
+    }
 }
 
 void Reconciler::handle_recon_state_transition(
