@@ -73,12 +73,15 @@ inline bool track_sequence(SequenceTracker& trk,
 
         // Open or extend gap
         if (!trk.gap_open) {
-            // NEW gap detected
+            // NEW gap detected - only increment epoch here
+            // BEHAVIORAL CHANGE (FX-7054): gap_epoch now increments only on NEW gaps,
+            // not on gap extensions. This allows callers to distinguish between a new
+            // gap event vs. an existing gap growing larger.
             trk.gap_open = true;
             trk.gap_start_seq = trk.expected_seq;
             trk.gap_opened_tsc = now_ts;           // FX-7054: Record detection time
             trk.orders_in_gap_count = 0;           // FX-7054: Reset counter for new gap
-            ++trk.gap_epoch;                       // Increment epoch only on NEW gap (not extension)
+            ++trk.gap_epoch;
         }
 
         // Update last missing (gap may be extending)

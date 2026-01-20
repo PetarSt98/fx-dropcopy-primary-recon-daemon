@@ -348,7 +348,12 @@ inline void clear_all_gap_uncertainty(OrderState& os) noexcept {
 
 } // namespace core
 
-// Include sequence_tracker.hpp after OrderState is fully defined to avoid circular dependency
+// ===== FX-7054: Inline implementation dependency resolution =====
+// Include sequence_tracker.hpp after OrderState is fully defined to avoid circular dependency.
+// This pattern is intentional: sequence_tracker.hpp includes exec_event.hpp (for Source),
+// while order_state.hpp needs SequenceTracker for helper functions. By placing the include
+// after OrderState definition and before the inline implementations that use SequenceTracker,
+// we break the circular dependency while keeping all code inline (HFT requirement).
 #include "core/sequence_tracker.hpp"
 
 namespace core {
@@ -394,6 +399,10 @@ inline void clear_gap_uncertainty(OrderState& os, Source source, SequenceTracker
 
     // Decrement tracker count if was marked and tracker provided
     if (was_marked && tracker) {
+        // Debug assertion: count should be > 0 if order was marked
+        // If this fires, it indicates an inconsistency in gap tracking state
+        assert(tracker->orders_in_gap_count > 0 && 
+               "clear_gap_uncertainty: underflow detected - count already 0 but order was marked");
         if (tracker->orders_in_gap_count > 0) {
             --tracker->orders_in_gap_count;
         }

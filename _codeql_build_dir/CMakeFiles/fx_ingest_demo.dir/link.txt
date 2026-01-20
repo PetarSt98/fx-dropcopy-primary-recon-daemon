@@ -1,0 +1,1 @@
+/home/runner/work/fx-dropcopy-primary-recon-daemon/.codeql-scratch/dbs/cpp/working/autobuild/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/fx_ingest_demo.dir/link.d CMakeFiles/fx_ingest_demo.dir/src/api/demo_main.cpp.o CMakeFiles/fx_ingest_demo.dir/src/ingest/fix_parser.cpp.o CMakeFiles/fx_ingest_demo.dir/src/core/reconciler.cpp.o -o fx_ingest_demo  libfx_core.a

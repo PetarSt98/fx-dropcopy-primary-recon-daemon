@@ -1,0 +1,1 @@
+/home/runner/work/fx-dropcopy-primary-recon-daemon/.codeql-scratch/dbs/cpp/working/autobuild/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/fx_aeron_publisher.dir/link.d CMakeFiles/fx_aeron_publisher.dir/src/api/aeron_publisher.cpp.o -o fx_aeron_publisher  -Wl,-rpath,/usr/local/lib libfx_core.a /usr/local/lib/libaeron.so -ldl -lm
