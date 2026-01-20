@@ -203,9 +203,10 @@ void Reconciler::run() {
     std::uint32_t backoff = 0;
     last_poll_tsc_ = util::rdtsc();
     
-    // FX-7054: Gap timeout tracking
+    // FX-7054: Gap timeout tracking - check once per second (not in hot path)
+    static constexpr std::uint64_t GAP_CHECK_INTERVAL_NS = 1'000'000'000ULL;  // 1 second
     std::uint64_t last_gap_check_tsc = util::rdtsc();
-    const std::uint64_t gap_check_interval_tsc = util::ns_to_tsc(1'000'000'000ULL);  // Check every 1s
+    const std::uint64_t gap_check_interval_tsc = util::ns_to_tsc(GAP_CHECK_INTERVAL_NS);
 
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
@@ -524,8 +525,10 @@ void Reconciler::check_gap_timeouts(std::uint64_t now_tsc) noexcept {
     const std::uint64_t gap_timeout_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
     
     // Check Primary gap timeout
+    // Note: gap_opened_tsc is always set when gap_open becomes true (see track_sequence),
+    // but we check > 0 as a defensive measure against uninitialized state
     if (primary_seq_tracker_.gap_open &&
-        primary_seq_tracker_.gap_opened_tsc > 0 &&
+        primary_seq_tracker_.gap_opened_tsc != 0 &&
         (now_tsc - primary_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
         
         LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
@@ -540,7 +543,7 @@ void Reconciler::check_gap_timeouts(std::uint64_t now_tsc) noexcept {
     
     // Check DropCopy gap timeout
     if (dropcopy_seq_tracker_.gap_open &&
-        dropcopy_seq_tracker_.gap_opened_tsc > 0 &&
+        dropcopy_seq_tracker_.gap_opened_tsc != 0 &&
         (now_tsc - dropcopy_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
         
         LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
