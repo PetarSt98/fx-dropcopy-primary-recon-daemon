@@ -122,10 +122,7 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
             break;
         }
 
-        // Increment counter if gap was closed by fill
-        if (gap_ev.gap_closed_by_fill) {
-            ++counters_.gaps_closed_by_fill;
-        }
+        // Note: gaps_closed_by_fill is incremented in the switch above when kind == GapFill
 
         if (!seq_gap_ring_.try_push(gap_ev)) {
             ++counters_.sequence_gap_ring_drops;
