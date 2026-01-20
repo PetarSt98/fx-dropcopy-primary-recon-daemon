@@ -143,6 +143,10 @@ public:
 
     // Accessor for last poll TSC (used by tests)
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
+    
+    // Setter for last poll TSC (used by tests with simulated time)
+    // Must be called before poll_expired to prevent infinite reschedule loops
+    void set_last_poll_tsc_for_test(std::uint64_t tsc) noexcept { last_poll_tsc_ = tsc; }
 
 private:
     void process_event(const ExecEvent& ev) noexcept;

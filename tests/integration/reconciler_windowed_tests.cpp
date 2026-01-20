@@ -930,7 +930,12 @@ TEST_F(ReconcilerWindowedTest, GapClosesAfterTimeout) {
     // This will process timers for both ORD_INIT and ORD1:
     // - ORD_INIT timer fires, checks is_gap_suppressed, gap times out
     // - ORD1 timer fires, checks is_gap_suppressed, gap already closed
-    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
+    // 
+    // IMPORTANT: Must set last_poll_tsc to simulated time before polling,
+    // otherwise timer reschedules use stale time causing infinite loop.
+    const auto poll_time = ns_to_tsc(200'000'000);
+    reconciler.set_last_poll_tsc_for_test(poll_time);
+    timer_wheel->poll_expired(poll_time, [&](OrderKey k, std::uint32_t g) {
         reconciler.on_grace_deadline_expired(k, g);
     });
 
