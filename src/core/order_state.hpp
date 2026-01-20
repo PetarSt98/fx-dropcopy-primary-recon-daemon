@@ -68,6 +68,13 @@ struct OrderState {
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
     std::uint16_t gap_suppression_epoch{0};  // Upgraded to uint16_t to avoid wrap-around issues
 
+    // ===== FX-7054: Per-order gap uncertainty flags =====
+    // Bitmask indicating which session gaps affect this order's reconciliation
+    // Bit 0: Primary session gap uncertainty
+    // Bit 1: DropCopy session gap uncertainty
+    // Bits 2-7: Reserved for additional sessions
+    std::uint8_t gap_uncertainty_flags{0};
+
     // ===== Divergence emission tracking (FX-7053) =====
     // These fields support idempotent divergence emission to avoid flooding
     // the downstream divergence queue with repeated identical events.
@@ -294,5 +301,103 @@ inline void record_divergence_emission(
 
 static_assert(sizeof(OrderState) <= 256, "OrderState exceeds cache-friendly size limit");
 static_assert(std::is_trivially_copyable_v<OrderState>, "OrderState must remain trivially copyable");
+
+// ===== FX-7054: Gap uncertainty flag bits =====
+namespace GapUncertaintyFlags {
+    constexpr std::uint8_t NONE     = 0u;
+    constexpr std::uint8_t PRIMARY  = 1u << 0;  // Bit 0
+    constexpr std::uint8_t DROPCOPY = 1u << 1;  // Bit 1
+    // Bits 2-7 reserved for future multi-session support
+}
+
+// Forward declaration for SequenceTracker (defined in sequence_tracker.hpp)
+struct SequenceTracker;
+
+// ===== FX-7054: Gap uncertainty helper functions =====
+
+// Mark order as affected by a gap on the given source.
+// Increments the tracker's orders_in_gap_count if newly marked.
+inline void mark_gap_uncertainty(
+    OrderState& os,
+    Source source,
+    SequenceTracker& tracker
+) noexcept;
+
+// Check if order has any gap uncertainty flags set
+[[nodiscard]] inline bool has_gap_uncertainty(const OrderState& os) noexcept {
+    return os.gap_uncertainty_flags != GapUncertaintyFlags::NONE;
+}
+
+// Check if order has gap uncertainty for specific source
+[[nodiscard]] inline bool has_gap_uncertainty_for(const OrderState& os, Source source) noexcept {
+    const std::uint8_t flag = (source == Source::Primary)
+        ? GapUncertaintyFlags::PRIMARY
+        : GapUncertaintyFlags::DROPCOPY;
+    return (os.gap_uncertainty_flags & flag) != 0;
+}
+
+// Clear gap uncertainty for a specific source.
+// Decrements tracker's orders_in_gap_count if was marked.
+inline void clear_gap_uncertainty(OrderState& os, Source source, SequenceTracker* tracker = nullptr) noexcept;
+
+// Clear all gap uncertainty (e.g., when order is confirmed matched)
+inline void clear_all_gap_uncertainty(OrderState& os) noexcept {
+    os.gap_uncertainty_flags = GapUncertaintyFlags::NONE;
+    // Note: gap_suppression_epoch preserved for historical tracking
+}
+
+} // namespace core
+
+// Include sequence_tracker.hpp after OrderState is fully defined to avoid circular dependency
+#include "core/sequence_tracker.hpp"
+
+namespace core {
+
+// ===== FX-7054: Inline implementations that depend on SequenceTracker =====
+
+inline void mark_gap_uncertainty(
+    OrderState& os,
+    Source source,
+    SequenceTracker& tracker
+) noexcept {
+    if (!tracker.gap_open) return;
+
+    const std::uint8_t flag = (source == Source::Primary)
+        ? GapUncertaintyFlags::PRIMARY
+        : GapUncertaintyFlags::DROPCOPY;
+
+    // Check if already marked
+    const bool was_marked = (os.gap_uncertainty_flags & flag) != 0;
+
+    // Set the flag
+    os.gap_uncertainty_flags |= flag;
+
+    // Update epoch to latest
+    os.gap_suppression_epoch = tracker.gap_epoch;
+
+    // Increment tracker count if newly marked
+    if (!was_marked) {
+        ++tracker.orders_in_gap_count;
+    }
+}
+
+inline void clear_gap_uncertainty(OrderState& os, Source source, SequenceTracker* tracker) noexcept {
+    const std::uint8_t flag = (source == Source::Primary)
+        ? GapUncertaintyFlags::PRIMARY
+        : GapUncertaintyFlags::DROPCOPY;
+
+    // Check if was marked
+    const bool was_marked = (os.gap_uncertainty_flags & flag) != 0;
+
+    // Clear the flag
+    os.gap_uncertainty_flags &= static_cast<std::uint8_t>(~flag);
+
+    // Decrement tracker count if was marked and tracker provided
+    if (was_marked && tracker) {
+        if (tracker->orders_in_gap_count > 0) {
+            --tracker->orders_in_gap_count;
+        }
+    }
+}
 
 } // namespace core
