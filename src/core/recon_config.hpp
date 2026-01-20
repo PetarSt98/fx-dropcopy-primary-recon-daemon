@@ -26,6 +26,10 @@ struct ReconConfig {
     // Feature flags
     bool enable_windowed_recon{true};   // Enable two-stage pipeline (can disable for A/B testing)
     bool enable_gap_suppression{true};  // Suppress divergences during sequence gaps
+    
+    // FX-7054: Gap timeout - close gap after this duration if not recovered
+    // This prevents indefinite suppression if messages are truly lost
+    std::uint64_t gap_timeout_ns{30'000'000'000ULL};  // 30 seconds default
 };
 
 static_assert(std::is_trivially_copyable_v<ReconConfig>, "ReconConfig must be trivially copyable");

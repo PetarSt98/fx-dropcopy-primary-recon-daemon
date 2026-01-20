@@ -4,6 +4,7 @@
 
 #include "core/order_state.hpp"
 #include "core/order_lifecycle.hpp"
+#include "core/gap_uncertainty.hpp"
 #include "util/async_log.hpp"
 #include "util/rdtsc.hpp"
 #include "util/tsc_calibration.hpp"
@@ -138,11 +139,13 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         return;
     }
 
-    // Mark orders affected by open gaps for suppression
-    if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->gap_suppression_epoch = static_cast<std::uint16_t>(
-            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFFFF
-        );
+    // FX-7054: Mark orders affected by open gaps using per-session epoch tracking
+    // Note: mark_gap_uncertainty() internally increments orders_in_gap_count
+    if (ev.source == Source::Primary && primary_seq_tracker_.gap_open) {
+        mark_gap_uncertainty(*st, Source::Primary, primary_seq_tracker_);
+    }
+    if (ev.source == Source::DropCopy && dropcopy_seq_tracker_.gap_open) {
+        mark_gap_uncertainty(*st, Source::DropCopy, dropcopy_seq_tracker_);
     }
 
     // === Update appropriate view ===
@@ -199,6 +202,10 @@ void Reconciler::run() {
     ExecEvent dropcopy_evt{};
     std::uint32_t backoff = 0;
     last_poll_tsc_ = util::rdtsc();
+    
+    // FX-7054: Gap timeout tracking
+    std::uint64_t last_gap_check_tsc = util::rdtsc();
+    const std::uint64_t gap_check_interval_tsc = util::ns_to_tsc(1'000'000'000ULL);  // Check every 1s
 
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
@@ -218,11 +225,17 @@ void Reconciler::run() {
         // Warm path: poll timer wheel for expired deadlines
         // Always use fresh rdtsc() to avoid missing timer deadlines
         // (using stale last_poll_tsc_ could cause timers to be skipped)
+        const std::uint64_t now = util::rdtsc();
         if (timer_wheel_) {
-            const std::uint64_t now = util::rdtsc();
             timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
                 on_grace_deadline_expired(key, gen);
             });
+        }
+        
+        // FX-7054: Periodic gap timeout check (not in hot path - once per second)
+        if (now - last_gap_check_tsc > gap_check_interval_tsc) {
+            check_gap_timeouts(now);
+            last_gap_check_tsc = now;
         }
 
         // Backoff when idle - exponential backoff reduces CPU burn
@@ -250,13 +263,17 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
         return false;
     }
 
-    // Order is suppressed if it has been flagged during a gap
-    // and we still have an open gap on either side
-    if (os.gap_suppression_epoch == 0) {
-        return false;
+    // FX-7054: Use Part 1's is_suppressed_by_gap() helper for each source
+    // Returns true if order's epoch matches tracker's current open gap epoch
+    if (is_suppressed_by_gap(os, Source::Primary, primary_seq_tracker_)) {
+        return true;
+    }
+    
+    if (is_suppressed_by_gap(os, Source::DropCopy, dropcopy_seq_tracker_)) {
+        return true;
     }
 
-    return primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open;
+    return false;
 }
 
 void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
@@ -290,6 +307,9 @@ void Reconciler::exit_grace_period(OrderState& os, std::uint64_t /*now_tsc*/) no
 
     os.recon_state = ReconState::Matched;
     os.current_mismatch = MismatchMask{};
+    
+    // FX-7054: Clear gap uncertainty when order matches
+    clear_all_gap_uncertainty(os);
 
     ++counters_.false_positive_avoided;
     ++counters_.orders_matched;
@@ -368,6 +388,9 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
 
     // Record emission for deduplication
     record_divergence_emission(os, mismatch, now_tsc);
+    
+    // FX-7054: Clear gap uncertainty after confirmed divergence
+    clear_all_gap_uncertainty(os);
 }
 
 void Reconciler::handle_recon_state_transition(
@@ -456,6 +479,78 @@ void Reconciler::handle_recon_state_transition(
                 }
             }
             break;
+    }
+}
+
+// ===== FX-7054: Gap management implementations =====
+
+void Reconciler::close_session_gap(Source source) noexcept {
+    SequenceTracker& tracker = (source == Source::Primary)
+        ? primary_seq_tracker_
+        : dropcopy_seq_tracker_;
+    
+    if (!tracker.gap_open) {
+        return;  // Gap already closed
+    }
+    
+    // Capture values for logging before closing
+    const auto epoch = tracker.gap_epoch;
+    const auto orders_affected = tracker.orders_in_gap_count;
+    const auto gap_opened_tsc = tracker.gap_opened_tsc;
+    
+    // Use Part 1's close_gap() helper
+    const bool was_closed = close_gap(tracker);
+    
+    if (was_closed) {
+        ++counters_.gaps_closed;
+        
+        // Log gap closure (gaps are rare, OK to log)
+        LOG_HOT_LVL(::util::LogLevel::Info, "RECON",
+                    "gap_closed src=%u epoch=%u orders_affected=%u duration_tsc=%llu",
+                    static_cast<unsigned>(source),
+                    static_cast<unsigned>(epoch),
+                    static_cast<unsigned>(orders_affected),
+                    static_cast<unsigned long long>(util::rdtsc() - gap_opened_tsc));
+    }
+    
+    // Orders in SuppressedByGap state will be re-evaluated when:
+    // 1. Their recheck timer fires (already scheduled in on_grace_deadline_expired)
+    // 2. They receive a new event (triggers handle_recon_state_transition)
+    //
+    // No O(N) scan needed - lazy re-evaluation via existing mechanisms
+}
+
+void Reconciler::check_gap_timeouts(std::uint64_t now_tsc) noexcept {
+    const std::uint64_t gap_timeout_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
+    
+    // Check Primary gap timeout
+    if (primary_seq_tracker_.gap_open &&
+        primary_seq_tracker_.gap_opened_tsc > 0 &&
+        (now_tsc - primary_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
+        
+        LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
+                    "gap_timeout src=Primary epoch=%u missing=[%llu,%llu]",
+                    static_cast<unsigned>(primary_seq_tracker_.gap_epoch),
+                    static_cast<unsigned long long>(primary_seq_tracker_.gap_start_seq),
+                    static_cast<unsigned long long>(primary_seq_tracker_.gap_last_missing_seq));
+        
+        close_session_gap(Source::Primary);
+        ++counters_.gap_timeouts;
+    }
+    
+    // Check DropCopy gap timeout
+    if (dropcopy_seq_tracker_.gap_open &&
+        dropcopy_seq_tracker_.gap_opened_tsc > 0 &&
+        (now_tsc - dropcopy_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
+        
+        LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
+                    "gap_timeout src=DropCopy epoch=%u missing=[%llu,%llu]",
+                    static_cast<unsigned>(dropcopy_seq_tracker_.gap_epoch),
+                    static_cast<unsigned long long>(dropcopy_seq_tracker_.gap_start_seq),
+                    static_cast<unsigned long long>(dropcopy_seq_tracker_.gap_last_missing_seq));
+        
+        close_session_gap(Source::DropCopy);
+        ++counters_.gap_timeouts;
     }
 }
 
