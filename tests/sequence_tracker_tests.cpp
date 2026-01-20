@@ -69,4 +69,44 @@ TEST(SequenceTrackerTest, OutOfOrderDetected) {
     EXPECT_EQ(evt.seen_seq, 2);
 }
 
+TEST(SequenceTrackerTest, GapClosedByFill) {
+    core::SequenceTracker trk{};
+    core::SequenceGapEvent evt{};
+    
+    // Initialize with seq 1
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    
+    // Create a gap: receive seq 5 (gap: 2, 3, 4)
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 5, 100, &evt));
+    EXPECT_TRUE(trk.gap_open);
+    EXPECT_EQ(trk.gap_start_seq, 2);
+    EXPECT_EQ(trk.gap_end_seq, 5);
+    EXPECT_FALSE(evt.gap_closed_by_fill);  // Gap just opened, not closed
+    
+    // Now receive seq 3 (out-of-order, fills part of gap)
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 3, 200, &evt));
+    EXPECT_EQ(evt.kind, core::GapKind::OutOfOrder);
+    EXPECT_TRUE(evt.gap_closed_by_fill);  // Gap should be closed by this fill
+    EXPECT_FALSE(trk.gap_open);  // Gap should be closed now
+}
+
+TEST(SequenceTrackerTest, GapNotClosedByDuplicate) {
+    core::SequenceTracker trk{};
+    core::SequenceGapEvent evt{};
+    
+    // Initialize with seq 1
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    EXPECT_FALSE(core::track_sequence(trk, core::Source::Primary, 0, 2, 0, &evt));
+    
+    // Create a gap: receive seq 5 (gap: 3, 4)
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 5, 100, &evt));
+    EXPECT_TRUE(trk.gap_open);
+    
+    // Receive duplicate of seq 2 (should not close gap)
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 2, 200, &evt));
+    EXPECT_EQ(evt.kind, core::GapKind::Duplicate);
+    EXPECT_FALSE(evt.gap_closed_by_fill);  // Duplicate should not close gap
+    EXPECT_TRUE(trk.gap_open);  // Gap should still be open
+}
+
 } // namespace

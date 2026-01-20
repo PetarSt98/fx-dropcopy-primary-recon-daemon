@@ -20,6 +20,7 @@ struct SequenceGapEvent {
     std::uint64_t seen_seq{0};
     GapKind kind{GapKind::Gap};
     std::uint64_t detect_ts{0};
+    bool gap_closed_by_fill{false};  // True if this event closed a gap by fill
 };
 
 struct SequenceTracker {
@@ -98,7 +99,7 @@ inline bool track_sequence(SequenceTracker& trk,
     
     // Check if this out-of-order message fills part of the gap
     // If so, we may be able to close the gap
-    bool gap_filled = false;
+    bool gap_closed_by_fill = false;
     if (trk.gap_open && !is_duplicate) {
         // Check if seq falls within the gap range [gap_start_seq, gap_end_seq)
         if (seq >= trk.gap_start_seq && seq < trk.gap_end_seq) {
@@ -108,7 +109,7 @@ inline bool track_sequence(SequenceTracker& trk,
             // NOTE: In production, you might want to require ALL missing sequences
             // to arrive before closing, but for HFT the timeout approach is safer.
             close_gap(trk);
-            gap_filled = true;
+            gap_closed_by_fill = true;
         }
     }
 
@@ -125,6 +126,7 @@ inline bool track_sequence(SequenceTracker& trk,
             out_event->kind = GapKind::OutOfOrder;
         }
         out_event->detect_ts = now_ts;
+        out_event->gap_closed_by_fill = gap_closed_by_fill;
     }
     return true;
 }
