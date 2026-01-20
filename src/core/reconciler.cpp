@@ -404,18 +404,22 @@ void Reconciler::handle_recon_state_transition(
         case ReconState::Unknown:
             // First event - determine initial state and schedule timer if needed
             if (os.seen_internal && !os.seen_dropcopy) {
-                os.recon_state = ReconState::AwaitingDropCopy;
-                // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
-                // This ensures we emit divergence if dropcopy never arrives
+                // Internal seen first; either await dropcopy or enter grace on mismatch
                 if (new_mismatch.any()) {
+                    // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                    // This ensures we emit divergence if dropcopy never arrives
                     enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::AwaitingDropCopy;
                 }
             } else if (os.seen_dropcopy && !os.seen_internal) {
-                os.recon_state = ReconState::AwaitingPrimary;
-                // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
-                // This ensures we emit divergence if primary never arrives
+                // Dropcopy seen first; either await primary or enter grace on mismatch
                 if (new_mismatch.any()) {
+                    // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                    // This ensures we emit divergence if primary never arrives
                     enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::AwaitingPrimary;
                 }
             } else if (both_sides_seen(os)) {
                 // Both sides seen on first event (unusual but handle it)
