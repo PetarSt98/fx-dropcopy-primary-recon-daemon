@@ -15,6 +15,11 @@ struct ReconConfig {
     // Gap recheck period: when suppressed by gap, how long to wait before rechecking
     std::uint64_t gap_recheck_period_ns{100'000'000};  // 100ms default
 
+    // Gap close timeout: after this duration, consider gap closed even if missing messages
+    // never arrived. This prevents indefinite suppression when messages are truly lost.
+    // Should be longer than gap_recheck_period_ns to allow multiple rechecks.
+    std::uint64_t gap_close_timeout_ns{1'000'000'000};  // 1s default
+
     // Deduplication window: don't re-emit identical divergence within this period
     std::uint64_t divergence_dedup_window_ns{1'000'000'000};  // 1s default
 

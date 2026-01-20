@@ -136,7 +136,10 @@ TEST_F(ReconcilerWindowedTest, BothSidesMatch_NoDivergence) {
     // No divergence should be emitted
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
     EXPECT_EQ(counters_.orders_matched, 1u);
-    EXPECT_EQ(counters_.mismatch_observed, 0u);
+    // Note: mismatch_observed=1 because first event (primary only) triggers EXISTENCE mismatch
+    // which enters grace period. When dropcopy arrives matching, it resolves as false positive.
+    EXPECT_EQ(counters_.mismatch_observed, 1u);
+    EXPECT_EQ(counters_.false_positive_avoided, 1u);
 }
 
 // ============================================================================
@@ -164,24 +167,26 @@ TEST_F(ReconcilerWindowedTest, DropCopyLeads_PrimaryWithinGrace_NoDivergence) {
                                ns_to_tsc(0), "ORD1", 1);
     reconciler.process_event_for_test(dropcopy);
 
-    // State should be AwaitingPrimary, no divergence yet
+    // No divergence yet, but EXISTENCE mismatch detected (only dropcopy seen)
+    // State is InGrace with timer scheduled
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
-    EXPECT_EQ(counters_.mismatch_observed, 0u);
+    EXPECT_EQ(counters_.mismatch_observed, 1u);
 
-    // Verify state is AwaitingPrimary
+    // Verify state is InGrace (timer scheduled for EXISTENCE mismatch)
     OrderKey key = make_order_key(dropcopy);
     OrderState* os = store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, ReconState::AwaitingPrimary);
+    EXPECT_EQ(os->recon_state, ReconState::InGrace);
 
     // Primary arrives at t=50ms (within grace) with matching data
     auto primary = make_event(Source::Primary, OrdStatus::Filled, 100, 5000,
                               ns_to_tsc(50'000'000), "ORD1", 1);
     reconciler.process_event_for_test(primary);
 
-    // No divergence - matched successfully
+    // No divergence - mismatch resolved, false positive avoided
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
     EXPECT_EQ(counters_.orders_matched, 1u);
+    EXPECT_EQ(counters_.false_positive_avoided, 1u);
     EXPECT_EQ(os->recon_state, ReconState::Matched);
 }
 
@@ -313,16 +318,29 @@ TEST_F(ReconcilerWindowedTest, PrimaryNeverArrives_PhantomOrder) {
                                ns_to_tsc(0), "ORD1", 1);
     reconciler.process_event_for_test(dropcopy);
 
-    // No divergence yet - state should be AwaitingPrimary
+    // No divergence yet - timer scheduled, state should be InGrace
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
 
-    // Verify order state is AwaitingPrimary
+    // Verify order state is InGrace (timer scheduled for EXISTENCE mismatch)
     OrderKey key = make_order_key(dropcopy);
     OrderState* os = store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, ReconState::AwaitingPrimary);
+    EXPECT_EQ(os->recon_state, ReconState::InGrace);
     EXPECT_FALSE(os->seen_internal);
     EXPECT_TRUE(os->seen_dropcopy);
+    EXPECT_EQ(counters_.mismatch_observed, 1u);
+
+    // Advance time past grace period - primary never arrives
+    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g);
+    });
+
+    // Divergence should be emitted (PhantomOrder - dropcopy seen, primary not)
+    auto divs = drain_divergences(*divergence_ring);
+    ASSERT_EQ(divs.size(), 1u);
+    EXPECT_EQ(divs[0].type, DivergenceType::PhantomOrder);
+    EXPECT_EQ(counters_.mismatch_confirmed, 1u);
+    EXPECT_EQ(os->recon_state, ReconState::DivergedConfirmed);
 }
 
 // ============================================================================
@@ -350,16 +368,29 @@ TEST_F(ReconcilerWindowedTest, DropcopyNeverArrives_MissingDropCopy) {
                               ns_to_tsc(0), "ORD1", 1);
     reconciler.process_event_for_test(primary);
 
-    // Verify order state is AwaitingDropCopy
+    // Verify order state is InGrace (timer scheduled for EXISTENCE mismatch)
     OrderKey key = make_order_key(primary);
     OrderState* os = store.find(key);
     ASSERT_NE(os, nullptr);
-    EXPECT_EQ(os->recon_state, ReconState::AwaitingDropCopy);
+    EXPECT_EQ(os->recon_state, ReconState::InGrace);
     EXPECT_TRUE(os->seen_internal);
     EXPECT_FALSE(os->seen_dropcopy);
+    EXPECT_EQ(counters_.mismatch_observed, 1u);
 
-    // No divergence yet (waiting for dropcopy)
+    // No divergence yet (timer scheduled, waiting for dropcopy or expiration)
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
+
+    // Advance time past grace period - dropcopy never arrives
+    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g);
+    });
+
+    // Divergence should be emitted (MissingDropCopy - primary seen, dropcopy not)
+    auto divs = drain_divergences(*divergence_ring);
+    ASSERT_EQ(divs.size(), 1u);
+    EXPECT_EQ(divs[0].type, DivergenceType::MissingDropCopy);
+    EXPECT_EQ(counters_.mismatch_confirmed, 1u);
+    EXPECT_EQ(os->recon_state, ReconState::DivergedConfirmed);
 }
 
 // ============================================================================
@@ -600,11 +631,13 @@ TEST_F(ReconcilerWindowedTest, GapSuppression_DivergenceSuppressed) {
                           timer_wheel.get(), config);
 
     // First, initialize the dropcopy sequence tracker with seq=1
+    // Note: This also triggers EXISTENCE mismatch for ORD_INIT (mismatch_observed=1)
     auto dropcopy_init = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
                                     ns_to_tsc(0), "ORD_INIT", 1, "EX0");
     reconciler.process_event_for_test(dropcopy_init);
 
     // Now send primary event for a different order
+    // This also triggers EXISTENCE mismatch (mismatch_observed=2)
     auto primary = make_event(Source::Primary, OrdStatus::Working, 100, 5000,
                               ns_to_tsc(5'000'000), "ORD1", 1, "EX1");
     reconciler.process_event_for_test(primary);
@@ -618,8 +651,10 @@ TEST_F(ReconcilerWindowedTest, GapSuppression_DivergenceSuppressed) {
     // Verify sequence gap was detected
     EXPECT_EQ(counters_.dropcopy_seq_gaps, 1u);
 
-    // Verify mismatch was observed and order entered grace
-    EXPECT_EQ(counters_.mismatch_observed, 1u);
+    // Verify mismatch was observed for BOTH orders (ORD_INIT and ORD1)
+    // - ORD_INIT: EXISTENCE mismatch when only dropcopy seen
+    // - ORD1: EXISTENCE mismatch when only primary seen (dropcopy arrives later)
+    EXPECT_EQ(counters_.mismatch_observed, 2u);
 
     OrderKey key = make_order_key(primary);
     OrderState* os = store.find(key);
@@ -802,6 +837,153 @@ TEST_F(ReconcilerWindowedTest, TimerWheelStats_Tracked) {
 
     // Check timer expired
     EXPECT_GE(stats.expired, 1u);
+}
+
+// ============================================================================
+// Test: One side arrives first, other arrives within grace → NO divergence
+// ============================================================================
+TEST_F(ReconcilerWindowedTest, OneSideFirst_OtherArrivesWithinGrace_NoDivergence) {
+    ReconConfig config;
+    config.grace_period_ns = 200'000'000;  // 200ms
+    config.enable_windowed_recon = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    // Primary arrives first at t=0
+    auto primary = make_event(Source::Primary, OrdStatus::Filled, 100, 5000,
+                              ns_to_tsc(0), "ORD1", 1);
+    reconciler.process_event_for_test(primary);
+
+    // Should be in grace (EXISTENCE mismatch)
+    OrderKey key = make_order_key(primary);
+    OrderState* os = store.find(key);
+    ASSERT_NE(os, nullptr);
+    EXPECT_EQ(os->recon_state, ReconState::InGrace);
+    EXPECT_EQ(counters_.mismatch_observed, 1u);
+
+    // Dropcopy arrives at t=50ms (within 200ms grace) with matching data
+    auto dropcopy = make_event(Source::DropCopy, OrdStatus::Filled, 100, 5000,
+                               ns_to_tsc(50'000'000), "ORD1", 1);
+    reconciler.process_event_for_test(dropcopy);
+
+    // Mismatch resolved - false positive avoided!
+    EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
+    EXPECT_EQ(os->recon_state, ReconState::Matched);
+    EXPECT_EQ(counters_.false_positive_avoided, 1u);
+    EXPECT_EQ(counters_.orders_matched, 1u);
+}
+
+// ============================================================================
+// Test: Gap closes after timeout
+// ============================================================================
+TEST_F(ReconcilerWindowedTest, GapClosesAfterTimeout) {
+    ReconConfig config;
+    config.grace_period_ns = 50'000'000;   // 50ms
+    config.gap_close_timeout_ns = 100'000'000;  // 100ms gap timeout
+    config.enable_windowed_recon = true;
+    config.enable_gap_suppression = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    // Initialize dropcopy sequence tracker with seq=1
+    // Note: This triggers EXISTENCE mismatch for ORD_INIT (enters grace)
+    auto dropcopy_init = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
+                                    ns_to_tsc(0), "ORD_INIT", 1, "EX0");
+    reconciler.process_event_for_test(dropcopy_init);
+
+    // Create primary event (triggers EXISTENCE mismatch for ORD1)
+    auto primary = make_event(Source::Primary, OrdStatus::Working, 100, 5000,
+                              ns_to_tsc(5'000'000), "ORD1", 1, "EX1");
+    reconciler.process_event_for_test(primary);
+
+    // Create dropcopy with gap (skip seq=2, send seq=3)
+    // ORD1 now has both sides with qty mismatch (100 vs 50)
+    auto dropcopy = make_event(Source::DropCopy, OrdStatus::Working, 50, 5000,
+                               ns_to_tsc(10'000'000), "ORD1", 3, "EX1");
+    reconciler.process_event_for_test(dropcopy);
+
+    // Gap should be detected
+    EXPECT_EQ(counters_.dropcopy_seq_gaps, 1u);
+
+    // Now advance time past gap_close_timeout (100ms) and poll timer
+    // This will process timers for both ORD_INIT and ORD1:
+    // - ORD_INIT timer fires, checks is_gap_suppressed, gap times out
+    // - ORD1 timer fires, checks is_gap_suppressed, gap already closed
+    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g);
+    });
+
+    // Gap should be closed by timeout
+    EXPECT_GE(counters_.gaps_closed_by_timeout, 1u);
+}
+
+// ============================================================================
+// Test: Gap closes when out-of-order message arrives
+// ============================================================================
+TEST_F(ReconcilerWindowedTest, GapClosesOnOutOfOrderMessage) {
+    ReconConfig config;
+    config.grace_period_ns = 500'000'000;  // 500ms
+    config.gap_close_timeout_ns = 1'000'000'000;  // 1s (long, so timeout doesn't trigger)
+    config.enable_windowed_recon = true;
+    config.enable_gap_suppression = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    // Initialize dropcopy sequence tracker with seq=1
+    // Note: ORD_INIT enters grace with EXISTENCE mismatch (only dropcopy seen)
+    auto dropcopy_init = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
+                                    ns_to_tsc(0), "ORD_INIT", 1, "EX0");
+    reconciler.process_event_for_test(dropcopy_init);
+
+    // Create gap: receive seq=3 (missing seq=2)
+    // ORD2 enters grace with EXISTENCE mismatch (only dropcopy seen)
+    auto dropcopy_gap = make_event(Source::DropCopy, OrdStatus::Working, 100, 5000,
+                                   ns_to_tsc(10'000'000), "ORD2", 3, "EX2");
+    reconciler.process_event_for_test(dropcopy_gap);
+
+    // Gap detected
+    EXPECT_EQ(counters_.dropcopy_seq_gaps, 1u);
+
+    // Now the missing message arrives (seq=2, out of order)
+    // ORD3 enters grace with EXISTENCE mismatch
+    // This also closes the gap in the sequence tracker
+    auto dropcopy_fill = make_event(Source::DropCopy, OrdStatus::Working, 50, 5000,
+                                    ns_to_tsc(20'000'000), "ORD3", 2, "EX3");
+    reconciler.process_event_for_test(dropcopy_fill);
+
+    // Gap should be closed by the out-of-order message
+    EXPECT_EQ(counters_.dropcopy_seq_out_of_order, 1u);
+    // The sequence tracker's gap_open should now be false (gap closed)
 }
 
 } // namespace test

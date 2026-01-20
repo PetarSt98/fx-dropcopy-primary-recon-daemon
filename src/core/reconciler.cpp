@@ -245,7 +245,7 @@ void Reconciler::run() {
 
 // ===== Two-stage pipeline helper implementations (FX-7053) =====
 
-bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
+bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
     if (!config_.enable_gap_suppression) {
         return false;
     }
@@ -254,6 +254,31 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
     // and we still have an open gap on either side
     if (os.gap_suppression_epoch == 0) {
         return false;
+    }
+
+    const std::uint64_t now = last_poll_tsc_;
+    const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
+
+    // Check primary gap - close if timed out
+    if (primary_seq_tracker_.gap_open) {
+        if (primary_seq_tracker_.gap_detected_tsc > 0 &&
+            now > primary_seq_tracker_.gap_detected_tsc &&
+            (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+            // Gap has timed out - close it
+            close_gap(primary_seq_tracker_);
+            ++counters_.gaps_closed_by_timeout;
+        }
+    }
+
+    // Check dropcopy gap - close if timed out
+    if (dropcopy_seq_tracker_.gap_open) {
+        if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
+            now > dropcopy_seq_tracker_.gap_detected_tsc &&
+            (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+            // Gap has timed out - close it
+            close_gap(dropcopy_seq_tracker_);
+            ++counters_.gaps_closed_by_timeout;
+        }
     }
 
     return primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open;
@@ -377,11 +402,21 @@ void Reconciler::handle_recon_state_transition(
 ) noexcept {
     switch (os.recon_state) {
         case ReconState::Unknown:
-            // First event - determine initial state
+            // First event - determine initial state and schedule timer if needed
             if (os.seen_internal && !os.seen_dropcopy) {
                 os.recon_state = ReconState::AwaitingDropCopy;
+                // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                // This ensures we emit divergence if dropcopy never arrives
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                }
             } else if (os.seen_dropcopy && !os.seen_internal) {
                 os.recon_state = ReconState::AwaitingPrimary;
+                // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                // This ensures we emit divergence if primary never arrives
+                if (new_mismatch.any()) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                }
             } else if (both_sides_seen(os)) {
                 // Both sides seen on first event (unusual but handle it)
                 if (new_mismatch.any()) {
@@ -402,6 +437,12 @@ void Reconciler::handle_recon_state_transition(
                     os.recon_state = ReconState::Matched;
                     ++counters_.orders_matched;
                 }
+            } else if (new_mismatch.any()) {
+                // Still waiting for primary, but ensure timer is scheduled
+                // (handles edge case where first event didn't schedule timer)
+                if (os.recon_deadline_tsc == 0) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                }
             }
             break;
 
@@ -413,6 +454,12 @@ void Reconciler::handle_recon_state_transition(
                 } else {
                     os.recon_state = ReconState::Matched;
                     ++counters_.orders_matched;
+                }
+            } else if (new_mismatch.any()) {
+                // Still waiting for dropcopy, but ensure timer is scheduled
+                // (handles edge case where first event didn't schedule timer)
+                if (os.recon_deadline_tsc == 0) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
                 }
             }
             break;
