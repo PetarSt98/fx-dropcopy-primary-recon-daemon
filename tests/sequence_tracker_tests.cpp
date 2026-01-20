@@ -130,7 +130,7 @@ TEST(SequenceTrackerTest, OutOfOrderOutsideGapRange) {
     
     // Receive seq 10 (out-of-order but OUTSIDE gap range [12, 15))
     // seq 10 < gap_start_seq 12, so it's just OutOfOrder, not GapFill
-    // Note: seq 10 was the initial seq, so last_seen_seq is 15, not 10
+    // Note: last_seen_seq is now 15, so seq 10 is out-of-order relative to expected_seq 16
     EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 10, 200, &evt));
     EXPECT_EQ(evt.kind, core::GapKind::OutOfOrder);  // Outside gap range → OutOfOrder
     EXPECT_FALSE(evt.gap_closed_by_fill);
