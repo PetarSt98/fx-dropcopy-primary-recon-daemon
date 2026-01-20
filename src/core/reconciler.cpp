@@ -310,7 +310,12 @@ void Reconciler::exit_grace_period(OrderState& os, std::uint64_t /*now_tsc*/) no
     os.current_mismatch = MismatchMask{};
     
     // FX-7054: Clear gap uncertainty when order matches
-    clear_all_gap_uncertainty(os);
+    if (has_gap_uncertainty_for(os, Source::Primary)) {
+        clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
+    }
+    if (has_gap_uncertainty_for(os, Source::DropCopy)) {
+        clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
+    }
 
     ++counters_.false_positive_avoided;
     ++counters_.orders_matched;
