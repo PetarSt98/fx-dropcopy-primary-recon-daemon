@@ -79,9 +79,11 @@ inline bool classify_divergence(const OrderState& state,
         return true;
     }
 
-    const auto qty_diff = std::llabs(state.dropcopy_cum_qty - state.internal_cum_qty);
-    const auto px_diff = std::llabs(state.dropcopy_avg_px - state.internal_avg_px);
-    if (qty_diff > qty_tolerance || px_diff > px_tolerance) {
+    // Use safe_abs_diff to avoid signed integer overflow and UB from std::llabs(LLONG_MIN)
+    const auto qty_diff = safe_abs_diff(state.dropcopy_cum_qty, state.internal_cum_qty);
+    const auto px_diff = safe_abs_diff(state.dropcopy_avg_px, state.internal_avg_px);
+    if (qty_diff > static_cast<std::uint64_t>(qty_tolerance) || 
+        px_diff > static_cast<std::uint64_t>(px_tolerance)) {
         fill_divergence_snapshot(state, DivergenceType::QuantityMismatch, out);
         return true;
     }
