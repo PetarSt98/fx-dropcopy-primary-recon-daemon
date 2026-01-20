@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "core/order_state.hpp"
+#include "core/gap_uncertainty.hpp"
 #include "util/tsc_calibration.hpp"
 
 namespace {
@@ -402,9 +403,12 @@ TEST(OrderStateGapUncertaintyTest, ClearGapUncertainty_ClearsFlag) {
 
     EXPECT_TRUE(core::has_gap_uncertainty_for(os, core::Source::Primary));
 
-    // Clear the flag
-    core::clear_gap_uncertainty(os, core::Source::Primary, nullptr);
+    // Clear the flag - should return true (was marked)
+    EXPECT_TRUE(core::clear_gap_uncertainty(os, core::Source::Primary, nullptr));
     EXPECT_FALSE(core::has_gap_uncertainty_for(os, core::Source::Primary));
+
+    // Clear again - should return false (was already clear)
+    EXPECT_FALSE(core::clear_gap_uncertainty(os, core::Source::Primary, nullptr));
 }
 
 TEST(OrderStateGapUncertaintyTest, ClearGapUncertainty_DecrementsTrackerCount) {
@@ -419,12 +423,12 @@ TEST(OrderStateGapUncertaintyTest, ClearGapUncertainty_DecrementsTrackerCount) {
 
     EXPECT_EQ(trk.orders_in_gap_count, 1u);
 
-    // Clear with tracker - count should decrement
-    core::clear_gap_uncertainty(os, core::Source::Primary, &trk);
+    // Clear with tracker reference - count should decrement
+    EXPECT_TRUE(core::clear_gap_uncertainty(os, core::Source::Primary, trk));
     EXPECT_EQ(trk.orders_in_gap_count, 0u);
 
-    // Clear again - count should stay at 0 (no underflow)
-    core::clear_gap_uncertainty(os, core::Source::Primary, &trk);
+    // Clear again - should return false and count stays at 0
+    EXPECT_FALSE(core::clear_gap_uncertainty(os, core::Source::Primary, &trk));
     EXPECT_EQ(trk.orders_in_gap_count, 0u);
 }
 
@@ -448,14 +452,14 @@ TEST(OrderStateGapUncertaintyTest, GapFlags_PerSourceIndependent) {
     EXPECT_TRUE(core::has_gap_uncertainty_for(os, core::Source::DropCopy));
     EXPECT_TRUE(core::has_gap_uncertainty(os));
 
-    // Clear Primary only
-    core::clear_gap_uncertainty(os, core::Source::Primary, &primary_trk);
+    // Clear Primary only - use reference overload
+    EXPECT_TRUE(core::clear_gap_uncertainty(os, core::Source::Primary, primary_trk));
     EXPECT_FALSE(core::has_gap_uncertainty_for(os, core::Source::Primary));
     EXPECT_TRUE(core::has_gap_uncertainty_for(os, core::Source::DropCopy));
     EXPECT_TRUE(core::has_gap_uncertainty(os));  // Still has DropCopy flag
 
-    // Clear DropCopy
-    core::clear_gap_uncertainty(os, core::Source::DropCopy, &dropcopy_trk);
+    // Clear DropCopy - use pointer overload
+    EXPECT_TRUE(core::clear_gap_uncertainty(os, core::Source::DropCopy, &dropcopy_trk));
     EXPECT_FALSE(core::has_gap_uncertainty_for(os, core::Source::Primary));
     EXPECT_FALSE(core::has_gap_uncertainty_for(os, core::Source::DropCopy));
     EXPECT_FALSE(core::has_gap_uncertainty(os));  // No flags set
@@ -477,7 +481,7 @@ TEST(OrderStateGapUncertaintyTest, HasGapUncertainty_DetectsAnyFlag) {
     EXPECT_TRUE(core::has_gap_uncertainty(os));
 
     // Clear and set DropCopy flag
-    core::clear_gap_uncertainty(os, core::Source::Primary, nullptr);
+    (void)core::clear_gap_uncertainty(os, core::Source::Primary, nullptr);
     core::mark_gap_uncertainty(os, core::Source::DropCopy, trk);
     EXPECT_TRUE(core::has_gap_uncertainty(os));
 }

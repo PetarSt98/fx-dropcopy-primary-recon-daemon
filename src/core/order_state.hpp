@@ -310,18 +310,9 @@ namespace GapUncertaintyFlags {
     // Bits 2-7 reserved for future multi-session support
 }
 
-// Forward declaration for SequenceTracker (defined in sequence_tracker.hpp)
-struct SequenceTracker;
-
-// ===== FX-7054: Gap uncertainty helper functions =====
-
-// Mark order as affected by a gap on the given source.
-// Increments the tracker's orders_in_gap_count if newly marked.
-inline void mark_gap_uncertainty(
-    OrderState& os,
-    Source source,
-    SequenceTracker& tracker
-) noexcept;
+// ===== FX-7054: Gap uncertainty query functions =====
+// These functions only read from OrderState and don't need SequenceTracker.
+// For functions that modify both OrderState and SequenceTracker, see gap_uncertainty.hpp
 
 // Check if order has any gap uncertainty flags set
 [[nodiscard]] inline bool has_gap_uncertainty(const OrderState& os) noexcept {
@@ -336,77 +327,11 @@ inline void mark_gap_uncertainty(
     return (os.gap_uncertainty_flags & flag) != 0;
 }
 
-// Clear gap uncertainty for a specific source.
-// Decrements tracker's orders_in_gap_count if was marked.
-inline void clear_gap_uncertainty(OrderState& os, Source source, SequenceTracker* tracker = nullptr) noexcept;
-
 // Clear all gap uncertainty (e.g., when order is confirmed matched)
+// Note: For clearing a single source with tracker count adjustment, use gap_uncertainty.hpp
 inline void clear_all_gap_uncertainty(OrderState& os) noexcept {
     os.gap_uncertainty_flags = GapUncertaintyFlags::NONE;
     // Note: gap_suppression_epoch preserved for historical tracking
-}
-
-} // namespace core
-
-// ===== FX-7054: Inline implementation dependency resolution =====
-// Include sequence_tracker.hpp after OrderState is fully defined to avoid circular dependency.
-// This pattern is intentional: sequence_tracker.hpp includes exec_event.hpp (for Source),
-// while order_state.hpp needs SequenceTracker for helper functions. By placing the include
-// after OrderState definition and before the inline implementations that use SequenceTracker,
-// we break the circular dependency while keeping all code inline (HFT requirement).
-#include "core/sequence_tracker.hpp"
-
-namespace core {
-
-// ===== FX-7054: Inline implementations that depend on SequenceTracker =====
-
-inline void mark_gap_uncertainty(
-    OrderState& os,
-    Source source,
-    SequenceTracker& tracker
-) noexcept {
-    if (!tracker.gap_open) return;
-
-    const std::uint8_t flag = (source == Source::Primary)
-        ? GapUncertaintyFlags::PRIMARY
-        : GapUncertaintyFlags::DROPCOPY;
-
-    // Check if already marked
-    const bool was_marked = (os.gap_uncertainty_flags & flag) != 0;
-
-    // Set the flag
-    os.gap_uncertainty_flags |= flag;
-
-    // Update epoch to latest
-    os.gap_suppression_epoch = tracker.gap_epoch;
-
-    // Increment tracker count if newly marked
-    if (!was_marked) {
-        ++tracker.orders_in_gap_count;
-    }
-}
-
-inline void clear_gap_uncertainty(OrderState& os, Source source, SequenceTracker* tracker) noexcept {
-    const std::uint8_t flag = (source == Source::Primary)
-        ? GapUncertaintyFlags::PRIMARY
-        : GapUncertaintyFlags::DROPCOPY;
-
-    // Check if was marked
-    const bool was_marked = (os.gap_uncertainty_flags & flag) != 0;
-
-    // Clear the flag
-    os.gap_uncertainty_flags &= static_cast<std::uint8_t>(~flag);
-
-    // Decrement tracker count if was marked and tracker provided
-    if (was_marked && tracker) {
-        // Debug assertion: count should be > 0 if order was marked
-        // If this fires, it indicates an inconsistency in gap tracking state
-        assert(tracker->orders_in_gap_count > 0 && 
-               "clear_gap_uncertainty: underflow detected - count already 0 but order was marked");
-        if (tracker->orders_in_gap_count > 0) {
-            --tracker->orders_in_gap_count;
-        }
-    }
 }
 
 } // namespace core
