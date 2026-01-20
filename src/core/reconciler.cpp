@@ -101,6 +101,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                 ++counters_.primary_seq_gaps;
             } else if (gap_ev.kind == GapKind::Duplicate) {
                 ++counters_.primary_seq_duplicates;
+            } else if (gap_ev.kind == GapKind::GapFill) {
+                ++counters_.primary_seq_out_of_order;
+                ++counters_.gaps_closed_by_fill;
             } else {
                 ++counters_.primary_seq_out_of_order;
             }
@@ -110,6 +113,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                 ++counters_.dropcopy_seq_gaps;
             } else if (gap_ev.kind == GapKind::Duplicate) {
                 ++counters_.dropcopy_seq_duplicates;
+            } else if (gap_ev.kind == GapKind::GapFill) {
+                ++counters_.dropcopy_seq_out_of_order;
+                ++counters_.gaps_closed_by_fill;
             } else {
                 ++counters_.dropcopy_seq_out_of_order;
             }

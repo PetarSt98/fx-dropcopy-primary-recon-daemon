@@ -9,7 +9,8 @@ namespace core {
 enum class GapKind : std::uint8_t {
     Gap,
     Duplicate,
-    OutOfOrder
+    OutOfOrder,
+    GapFill  // Out-of-order message that fills/closes a gap
 };
 
 struct SequenceGapEvent {
@@ -97,6 +98,7 @@ inline bool track_sequence(SequenceTracker& trk,
     
     // Check if this out-of-order message fills part of the gap
     // If so, we may be able to close the gap
+    bool gap_filled = false;
     if (trk.gap_open && !is_duplicate) {
         // Check if seq falls within the gap range [gap_start_seq, gap_end_seq)
         if (seq >= trk.gap_start_seq && seq < trk.gap_end_seq) {
@@ -106,6 +108,7 @@ inline bool track_sequence(SequenceTracker& trk,
             // NOTE: In production, you might want to require ALL missing sequences
             // to arrive before closing, but for HFT the timeout approach is safer.
             close_gap(trk);
+            gap_filled = true;
         }
     }
 
@@ -114,7 +117,13 @@ inline bool track_sequence(SequenceTracker& trk,
         out_event->session_id = session_id;
         out_event->expected_seq = trk.expected_seq;
         out_event->seen_seq = seq;
-        out_event->kind = is_duplicate ? GapKind::Duplicate : GapKind::OutOfOrder;
+        if (is_duplicate) {
+            out_event->kind = GapKind::Duplicate;
+        } else if (gap_filled) {
+            out_event->kind = GapKind::GapFill;
+        } else {
+            out_event->kind = GapKind::OutOfOrder;
+        }
         out_event->detect_ts = now_ts;
     }
     return true;
