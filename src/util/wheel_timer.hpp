@@ -56,8 +56,10 @@ public:
         std::uint64_t overflow_dropped{0};  // Entries dropped due to bucket overflow
     };
 
-    // Default tick duration in TSC cycles assuming 3GHz TSC frequency (fallback)
+    // Default tick duration in TSC cycles when ns_to_tsc fails (e.g., calibration issue).
+    // Formula: TICK_NS * DEFAULT_TSC_FREQ_HZ / NS_PER_SEC
     // At 3GHz: 1ms (TICK_NS=1,000,000ns) = 3,000,000 cycles
+    // Note: Intermediate multiplication (1e6 * 3e9 = 3e15) fits in uint64_t (max ~1.8e19).
     static constexpr std::uint64_t DEFAULT_TICK_TSC = 
         (TICK_NS * TscCalibration::DEFAULT_TSC_FREQ_HZ) / TscCalibration::NS_PER_SEC;
 
