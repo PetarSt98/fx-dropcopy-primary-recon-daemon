@@ -16,12 +16,11 @@ namespace core {
 
 // Safe absolute difference computation for signed integers.
 // Avoids undefined behavior from signed overflow and std::llabs(LLONG_MIN).
+// Casts to unsigned BEFORE subtraction to ensure well-defined unsigned arithmetic.
 [[nodiscard]] inline std::uint64_t safe_abs_diff(std::int64_t a, std::int64_t b) noexcept {
-    if (a >= b) {
-        return static_cast<std::uint64_t>(a - b);
-    } else {
-        return static_cast<std::uint64_t>(b - a);
-    }
+    const std::uint64_t ua = static_cast<std::uint64_t>(a);
+    const std::uint64_t ub = static_cast<std::uint64_t>(b);
+    return (a >= b) ? (ua - ub) : (ub - ua);
 }
 
 using OrderKey = std::uint64_t;
