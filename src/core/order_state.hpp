@@ -14,6 +14,15 @@
 
 namespace core {
 
+// Safe absolute difference computation for signed integers.
+// Avoids undefined behavior from signed overflow and std::llabs(LLONG_MIN).
+// Casts to unsigned BEFORE subtraction to ensure well-defined unsigned arithmetic.
+[[nodiscard]] inline std::uint64_t safe_abs_diff(std::int64_t a, std::int64_t b) noexcept {
+    const std::uint64_t ua = static_cast<std::uint64_t>(a);
+    const std::uint64_t ub = static_cast<std::uint64_t>(b);
+    return (a >= b) ? (ua - ub) : (ub - ua);
+}
+
 using OrderKey = std::uint64_t;
 
 inline OrderKey make_order_key(const ExecEvent& evt) noexcept {
@@ -225,15 +234,15 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
         m.set(MismatchMask::STATUS);
     }
 
-    // CumQty mismatch with tolerance
-    const auto qty_diff = std::llabs(os.internal_cum_qty - os.dropcopy_cum_qty);
-    if (qty_diff > qty_tolerance) {
+    // CumQty mismatch with tolerance (use safe_abs_diff to avoid overflow/UB)
+    const auto qty_diff = safe_abs_diff(os.internal_cum_qty, os.dropcopy_cum_qty);
+    if (qty_diff > static_cast<std::uint64_t>(qty_tolerance)) {
         m.set(MismatchMask::CUM_QTY);
     }
 
-    // AvgPx mismatch with tolerance
-    const auto px_diff = std::llabs(os.internal_avg_px - os.dropcopy_avg_px);
-    if (px_diff > px_tolerance) {
+    // AvgPx mismatch with tolerance (use safe_abs_diff to avoid overflow/UB)
+    const auto px_diff = safe_abs_diff(os.internal_avg_px, os.dropcopy_avg_px);
+    if (px_diff > static_cast<std::uint64_t>(px_tolerance)) {
         m.set(MismatchMask::AVG_PX);
     }
 
