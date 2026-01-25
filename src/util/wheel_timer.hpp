@@ -56,14 +56,22 @@ public:
         std::uint64_t overflow_dropped{0};  // Entries dropped due to bucket overflow
     };
 
+    // Default tick duration in TSC cycles when ns_to_tsc fails (e.g., calibration issue).
+    // Formula: TICK_NS * DEFAULT_TSC_FREQ_HZ / NS_PER_SEC
+    // At 3GHz: 1ms (TICK_NS=1,000,000ns) = 3,000,000 cycles
+    // Note: Intermediate multiplication (1e6 * 3e9 = 3e15) fits in uint64_t (max ~1.8e19).
+    static constexpr std::uint64_t DEFAULT_TICK_TSC = 
+        (TICK_NS * TscCalibration::DEFAULT_TSC_FREQ_HZ) / TscCalibration::NS_PER_SEC;
+
     // Constructor - initializes wheel at given starting time (in TSC cycles)
     explicit WheelTimer(std::uint64_t start_tsc = 0) noexcept
         : tick_tsc_(ns_to_tsc(TICK_NS))
         , current_tick_(tick_tsc_ > 0 ? (start_tsc / tick_tsc_) : 0)
         , last_poll_tsc_(start_tsc) {
-        // Ensure tick_tsc_ is at least 1 to prevent division by zero
+        // Ensure tick_tsc_ uses sensible fallback to prevent runaway loops
+        // when TSC calibration returns 0 (e.g., initialization order issues)
         if (tick_tsc_ == 0) {
-            tick_tsc_ = 1;
+            tick_tsc_ = DEFAULT_TICK_TSC;
         }
     }
 

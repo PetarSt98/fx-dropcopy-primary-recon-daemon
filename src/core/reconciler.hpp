@@ -50,6 +50,8 @@ struct ReconCounters {
     std::uint64_t gap_suppressions{0};        // Divergences suppressed due to open sequence gaps
     std::uint64_t timer_overflow{0};          // Timer wheel bucket overflow events (FX-7053 Part 3)
     std::uint64_t divergence_resolved{0};     // Confirmed divergences that later resolved
+    std::uint64_t gaps_closed_by_timeout{0};  // Sequence gaps closed due to timeout
+    std::uint64_t gaps_closed_by_fill{0};     // Sequence gaps closed by out-of-order message fill
 };
 
 // Default deduplication window: don't re-emit identical divergence within this period.
@@ -117,7 +119,8 @@ public:
     }
 
     // Check if divergence should be suppressed due to sequence gap
-    [[nodiscard]] bool is_gap_suppressed(const OrderState& os) const noexcept;
+    // Note: non-const because it may close timed-out gaps
+    [[nodiscard]] bool is_gap_suppressed(const OrderState& os) noexcept;
 
     // Enter grace period for an order with detected mismatch
     void enter_grace_period(OrderState& os, MismatchMask mismatch, std::uint64_t now_tsc) noexcept;
@@ -140,6 +143,10 @@ public:
 
     // Accessor for last poll TSC (used by tests)
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
+    
+    // Setter for last poll TSC (used by tests with simulated time)
+    // Must be called before poll_expired to prevent infinite reschedule loops
+    void set_last_poll_tsc_for_test(std::uint64_t tsc) noexcept { last_poll_tsc_ = tsc; }
 
 private:
     void process_event(const ExecEvent& ev) noexcept;
