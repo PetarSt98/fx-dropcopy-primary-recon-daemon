@@ -59,12 +59,32 @@ inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq)
     return true;
 }
 
-// Close the gap explicitly (e.g., after timeout or gap fill detection)
-inline void close_gap(SequenceTracker& trk) noexcept {
+// ===== FX-7054: Explicit gap closure function =====
+// Explicitly close a gap (called when gap is administratively resolved or timed out).
+// Returns true if gap was open, false if already closed.
+// Rationale: Gap closure should be **explicit** (timeout or admin action), not automatic.
+// In FX, gaps often resolve administratively, not by receiving missing messages.
+//
+// IMPORTANT: This resets orders_in_gap_count to 0 to prevent counter corruption.
+// Orders with flags from this gap should have their flags cleared BEFORE calling
+// close_gap(), or use clear_gap_uncertainty() with tracker=nullptr for cleanup.
+inline bool close_gap(SequenceTracker& trk) noexcept {
+    if (!trk.gap_open) {
+        return false;
+    }
+
     trk.gap_open = false;
     trk.gap_start_seq = 0;
+    // Master branch fields
     trk.gap_end_seq = 0;
     trk.gap_detected_tsc = 0;
+    // FX-7054 fields
+    trk.gap_opened_tsc = 0;
+    trk.gap_last_missing_seq = 0;
+    trk.orders_in_gap_count = 0;  // Reset to prevent corruption on next gap
+    // Note: gap_epoch preserved for historical tracking
+
+    return true;
 }
 
 inline bool track_sequence(SequenceTracker& trk,
@@ -153,30 +173,6 @@ inline bool track_sequence(SequenceTracker& trk,
         out_event->detect_ts = now_ts;
         out_event->gap_closed_by_fill = gap_closed_by_fill;
     }
-    return true;
-}
-
-// ===== FX-7054: Explicit gap closure function =====
-// Explicitly close a gap (called when gap is administratively resolved or timed out).
-// Returns true if gap was open, false if already closed.
-// Rationale: Gap closure should be **explicit** (timeout or admin action), not automatic.
-// In FX, gaps often resolve administratively, not by receiving missing messages.
-//
-// IMPORTANT: This resets orders_in_gap_count to 0 to prevent counter corruption.
-// Orders with flags from this gap should have their flags cleared BEFORE calling
-// close_gap(), or use clear_gap_uncertainty() with tracker=nullptr for cleanup.
-inline bool close_gap(SequenceTracker& trk) noexcept {
-    if (!trk.gap_open) {
-        return false;
-    }
-
-    trk.gap_open = false;
-    trk.gap_start_seq = 0;
-    trk.gap_opened_tsc = 0;
-    trk.gap_last_missing_seq = 0;
-    trk.orders_in_gap_count = 0;  // Reset to prevent corruption on next gap
-    // Note: gap_epoch preserved for historical tracking
-
     return true;
 }
 

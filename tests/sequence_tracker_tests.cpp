@@ -203,6 +203,7 @@ TEST(SequenceTrackerTest, OrdersInGapCount_ResetOnGapClose) {
     // Create new gap - count starts at 0 (no double-reset issue)
     EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 10, 2000, &evt));
     EXPECT_EQ(trk.orders_in_gap_count, 0u);
+}
 
 TEST(SequenceTrackerTest, GapClosedByFill) {
     core::SequenceTracker trk{};
