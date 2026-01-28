@@ -33,6 +33,8 @@ struct SequenceTracker {
     std::uint64_t gap_detected_tsc{0};  // TSC when gap was detected (for timeout)
     std::uint32_t gap_epoch{0};         // Incremented each time a new gap is detected (FX-7053)
                                         // Using uint32_t to avoid wrap-around issues (would require 4B+ gaps)
+                                        // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged").
+                                        // Epochs start at 1 and skip 0 on wrap-around.
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
@@ -82,7 +84,12 @@ inline bool track_sequence(SequenceTracker& trk,
         trk.gap_detected_tsc = now_ts;  // Record when gap was detected for timeout
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
-        ++trk.gap_epoch;  // Increment epoch each time a new gap is detected (FX-7053)
+        // Increment epoch each time a new gap is detected (FX-7053)
+        // Skip 0 on wrap-around since 0 is reserved as sentinel ("not flagged")
+        ++trk.gap_epoch;
+        if (trk.gap_epoch == 0) {
+            trk.gap_epoch = 1;  // Skip sentinel value
+        }
 
         if (out_event) {
             out_event->source = source;
