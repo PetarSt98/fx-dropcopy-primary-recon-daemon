@@ -41,6 +41,7 @@ struct SequenceTracker {
     std::uint32_t orders_in_gap_count{0};   // Count of orders marked with this gap's uncertainty
     std::uint64_t gap_end_seq{0};       // End of gap range (exclusive) - seq we jumped to
     std::uint64_t gap_detected_tsc{0};  // TSC when gap was detected (for timeout)
+};
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
     if (trk.initialized) {
@@ -134,14 +135,6 @@ inline bool track_sequence(SequenceTracker& trk,
         trk.gap_detected_tsc = now_ts;  // Record when gap was detected for timeout
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
-
-        // Increment epoch each time a new gap is detected (FX-7053)
-        // Skip 0 on wrap-around since 0 is reserved as sentinel ("not flagged")
-        ++trk.gap_epoch;
-        if (trk.gap_epoch == 0) {
-            trk.gap_epoch = 1;  // Skip sentinel value
-        }
-
 
         if (out_event) {
             out_event->source = source;
