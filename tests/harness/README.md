@@ -154,7 +154,7 @@ The `recon_determinism_tests` target is discovered and executed by `ctest` along
 1. **Determinism**: All timestamps are explicit (TSC-based), ensuring reproducible behavior
 2. **Isolation**: Each scenario runs with fresh state (no cross-contamination)
 3. **Fluent API**: Readable, self-documenting test scenarios
-4. **Zero Heap Allocations**: Arena-based allocation for performance
+4. **Allocation-aware design**: The core reconciliation engine targets zero heap allocations on hot paths; the test harness uses standard containers for clarity
 5. **Gap-Aware**: Tests validate gap suppression behavior (FX-7054)
 
 ## Validating the Entire Stack

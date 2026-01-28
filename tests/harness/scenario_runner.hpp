@@ -55,6 +55,8 @@ public:
 
     // Process single event
     void process_event(const core::ExecEvent& ev) {
+        // Update last_poll_tsc to match production behavior (gap timeout logic relies on this)
+        reconciler_->set_last_poll_tsc_for_test(ev.ingest_tsc);
         reconciler_->process_event_for_test(ev);
     }
 

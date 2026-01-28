@@ -14,11 +14,10 @@ TEST(ReconDeterminism, DropCopyLeadsPrimaryWithinGrace) {
     config.grace_period_ns = 500'000'000;  // 500ms
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(500))
         .starting_at(0)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345), 0)
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
         .advance_time(std::chrono::milliseconds(50))
-        .primary_fill("ORDER1", 100, to_micro(1.2345), 50'000'000)
+        .primary_fill("ORDER1", 100, to_micro(1.2345))
         .advance_time(std::chrono::milliseconds(500));
     
     auto result = run_scenario(scenario, config);
@@ -35,9 +34,8 @@ TEST(ReconDeterminism, PrimaryMissingBeyondGrace) {
     config.grace_period_ns = 200'000'000;  // 200ms
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(200))
         .starting_at(0)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345), 0)
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
         .advance_time(std::chrono::milliseconds(600));
     
     auto result = run_scenario(scenario, config);
@@ -55,13 +53,14 @@ TEST(ReconDeterminism, GapSuppressesConfirmation) {
     config.enable_gap_suppression = true;
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(200))
         .starting_at(0)
         // Create sequence gap (seq 1, then jump to 4)
-        .primary_working("ORDER1", 0)  // seq 1
+        .primary_working("ORDER1")  // seq 1
         .sequence_gap(core::Source::Primary, 2, 3)
-        .primary_working("ORDER2", 10'000'000)  // seq 4 (gap detected)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345), 20'000'000)
+        .advance_time(std::chrono::milliseconds(10))
+        .primary_working("ORDER2")  // seq 4 (gap detected)
+        .advance_time(std::chrono::milliseconds(10))
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
         .advance_time(std::chrono::milliseconds(600));
     
     auto result = run_scenario(scenario, config);
@@ -78,15 +77,14 @@ TEST(ReconDeterminism, ReplayProducesIdenticalOutput) {
     
     // Complex scenario with multiple orders
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(200))
         .starting_at(0)
-        .primary_new_order("ORDER1", 0)
+        .primary_new_order("ORDER1")
         .advance_time_ms(10)
-        .dropcopy_new_order("ORDER1", 10'000'000)
+        .dropcopy_new_order("ORDER1")
         .advance_time_ms(20)
-        .primary_partial_fill("ORDER1", 50, to_micro(1.2345), 30'000'000)
+        .primary_partial_fill("ORDER1", 50, to_micro(1.2345))
         .advance_time_ms(5)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2340), 35'000'000)  // Mismatch
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2340))  // Mismatch
         .advance_time_ms(500);
     
     // Run twice
@@ -107,10 +105,10 @@ TEST(ReconDeterminism, ReplayProducesIdenticalOutput) {
 // ===== Additional Test: Verify Determinism Helper Function =====
 TEST(ReconDeterminism, CheckDeterminismHelperWorks) {
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(200))
         .starting_at(0)
-        .primary_fill("ORDER1", 100, to_micro(1.2345), 0)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345), 5'000'000)
+        .primary_fill("ORDER1", 100, to_micro(1.2345))
+        .advance_time_ms(5)
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
         .advance_time_ms(10);
     
     // Should be deterministic
@@ -123,10 +121,10 @@ TEST(ReconDeterminism, QuantityMismatchDetected) {
     config.grace_period_ns = 100'000'000;  // 100ms
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(100))
         .starting_at(0)
-        .primary_fill("ORDER1", 100, to_micro(1.2345), 0)
-        .dropcopy_fill("ORDER1", 150, to_micro(1.2345), 10'000'000)  // Different quantity
+        .primary_fill("ORDER1", 100, to_micro(1.2345))
+        .advance_time(std::chrono::milliseconds(10))
+        .dropcopy_fill("ORDER1", 150, to_micro(1.2345))  // Different quantity
         .advance_time(std::chrono::milliseconds(200));
     
     auto result = run_scenario(scenario, config);
@@ -142,18 +140,17 @@ TEST(ReconDeterminism, PriceMismatchDetected) {
     config.grace_period_ns = 100'000'000;  // 100ms
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(100))
         .starting_at(0)
-        .primary_fill("ORDER1", 100, to_micro(1.2345), 0)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.5000), 10'000'000)  // Different price
+        .primary_fill("ORDER1", 100, to_micro(1.2345))
+        .advance_time(std::chrono::milliseconds(10))
+        .dropcopy_fill("ORDER1", 100, to_micro(1.5000))  // Different price
         .advance_time(std::chrono::milliseconds(200));
     
     auto result = run_scenario(scenario, config);
     
     ASSERT_EQ(result.confirmed_divergences.size(), 1);
-    // Price mismatch is classified as StateMismatch in the current implementation
-    EXPECT_TRUE(result.confirmed_divergences[0].type == core::DivergenceType::StateMismatch ||
-                result.confirmed_divergences[0].type == core::DivergenceType::QuantityMismatch);
+    // Price mismatch is classified as StateMismatch
+    EXPECT_EQ(result.confirmed_divergences[0].type, core::DivergenceType::StateMismatch);
     EXPECT_EQ(result.counters.mismatch_confirmed, 1);
 }
 
@@ -163,17 +160,19 @@ TEST(ReconDeterminism, MultipleOrdersHandledCorrectly) {
     config.grace_period_ns = 200'000'000;  // 200ms
     
     auto scenario = ReconScenarioBuilder()
-        .with_grace_period(std::chrono::milliseconds(200))
         .starting_at(0)
         // Order 1: Matches perfectly
-        .primary_fill("ORDER1", 100, to_micro(1.2345), 0)
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345), 5'000'000)
+        .primary_fill("ORDER1", 100, to_micro(1.2345))
+        .advance_time_ms(5)
+        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
         // Order 2: Diverges (missing primary)
-        .dropcopy_fill("ORDER2", 200, to_micro(2.5000), 10'000'000)
+        .advance_time_ms(5)
+        .dropcopy_fill("ORDER2", 200, to_micro(2.5000))
         // Order 3: Matches after brief delay
-        .dropcopy_fill("ORDER3", 300, to_micro(3.7500), 15'000'000)
+        .advance_time_ms(5)
+        .dropcopy_fill("ORDER3", 300, to_micro(3.7500))
         .advance_time_ms(50)
-        .primary_fill("ORDER3", 300, to_micro(3.7500), 65'000'000)
+        .primary_fill("ORDER3", 300, to_micro(3.7500))
         .advance_time(std::chrono::milliseconds(500));
     
     auto result = run_scenario(scenario, config);
