@@ -75,7 +75,8 @@ struct OrderState {
     MismatchMask current_mismatch{};      // 1-byte mask
 
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
-    std::uint16_t gap_suppression_epoch{0};  // Upgraded to uint16_t to avoid wrap-around issues
+    std::uint32_t gap_suppression_epoch{0};  // Using uint32_t to match SequenceTracker::gap_epoch
+                                             // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged")
 
     // ===== FX-7054: Per-order gap uncertainty flags =====
     // Bitmask indicating which session gaps affect this order's reconciliation

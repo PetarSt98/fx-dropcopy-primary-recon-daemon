@@ -30,7 +30,10 @@ struct SequenceTracker {
     bool gap_open{false};
   
     std::uint64_t gap_start_seq{0};      // First missing sequence (EXISTING)
-    std::uint16_t gap_epoch{0};          // Incremented each time a new gap is detected (FX-7053)
+    std::uint32_t gap_epoch{0};          // Incremented each time a new gap is detected (FX-7053)
+                                         // Using uint32_t to avoid wrap-around issues (would require 4B+ gaps)
+                                         // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged").
+                                         // Epochs start at 1 and skip 0 on wrap-around.
 
     // ===== FX-7054: Enhanced gap lifecycle tracking =====
     std::uint64_t gap_opened_tsc{0};        // When gap was first detected (TSC cycles)
@@ -117,7 +120,12 @@ inline bool track_sequence(SequenceTracker& trk,
             trk.gap_start_seq = trk.expected_seq;
             trk.gap_opened_tsc = now_ts;           // FX-7054: Record detection time
             trk.orders_in_gap_count = 0;           // FX-7054: Reset counter for new gap
+            // Increment epoch each time a new gap is detected (FX-7053)
+            // Skip 0 on wrap-around since 0 is reserved as sentinel ("not flagged")
             ++trk.gap_epoch;
+            if (trk.gap_epoch == 0) {
+                trk.gap_epoch = 1;  // Skip sentinel value
+            }
         }
 
         // Update last missing (gap may be extending)
