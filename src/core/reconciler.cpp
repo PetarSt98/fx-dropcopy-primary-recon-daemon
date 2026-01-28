@@ -272,8 +272,14 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
         return false;
     }
 
-    // FX-7054: Use Part 1's is_suppressed_by_gap() helper for each source
-    // Returns true if order's epoch matches tracker's current open gap epoch
+    // FX-7054 Part 2: Use per-source gap uncertainty tracking via is_suppressed_by_gap() helper.
+    // This checks:
+    //   1. Order has gap_uncertainty_flags set for the source
+    //   2. Tracker's gap is currently open
+    //   3. Order's gap_suppression_epoch matches tracker's current gap_epoch
+    //
+    // This is more precise than the original FX-7054 Part 1 approach (max epoch across sources)
+    // because it tracks which specific source(s) caused the gap uncertainty.
     if (is_suppressed_by_gap(os, Source::Primary, primary_seq_tracker_)) {
         return true;
     }
@@ -282,42 +288,31 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
         return true;
     }
 
+    // Inline gap timeout check (from master branch's FX-7054 Part 1):
+    // Close gaps that have exceeded gap_close_timeout_ns during reconciliation checks.
+    // This provides faster gap closure than the periodic check_gap_timeouts() in run().
     const std::uint64_t now = last_poll_tsc_;
     const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
 
-    // Check primary gap - close if timed out
     if (primary_seq_tracker_.gap_open) {
         if (primary_seq_tracker_.gap_detected_tsc > 0 &&
             now > primary_seq_tracker_.gap_detected_tsc &&
             (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-            // Gap has timed out - close it
             close_gap(primary_seq_tracker_);
             ++counters_.gaps_closed_by_timeout;
         }
     }
 
-    // Check dropcopy gap - close if timed out
     if (dropcopy_seq_tracker_.gap_open) {
         if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
             now > dropcopy_seq_tracker_.gap_detected_tsc &&
             (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-            // Gap has timed out - close it
             close_gap(dropcopy_seq_tracker_);
             ++counters_.gaps_closed_by_timeout;
         }
     }
 
-    // Only suppress if the order was affected by the CURRENT gap epoch.
-    // This prevents incorrectly suppressing orders from old gaps when a new gap opens.
-    const std::uint32_t current_max_epoch = std::max(primary_seq_tracker_.gap_epoch, 
-                                                     dropcopy_seq_tracker_.gap_epoch);
-    
-    // Order must have been flagged during the current gap epoch AND a gap must still be open
-    if (os.gap_suppression_epoch != current_max_epoch) {
-        return false;
-    }
-
-    return primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open;
+    return false;
 }
 
 void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
@@ -353,11 +348,12 @@ void Reconciler::exit_grace_period(OrderState& os, std::uint64_t /*now_tsc*/) no
     os.current_mismatch = MismatchMask{};
     
     // FX-7054: Clear gap uncertainty when order matches
+    // Return values intentionally ignored - we don't need to track if flags were previously set
     if (has_gap_uncertainty_for(os, Source::Primary)) {
-        clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
+        (void)clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
     }
     if (has_gap_uncertainty_for(os, Source::DropCopy)) {
-        clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
+        (void)clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
     }
 
     ++counters_.false_positive_avoided;
@@ -447,11 +443,12 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
     record_divergence_emission(os, mismatch, now_tsc);
     
     // FX-7054: Clear gap uncertainty after confirmed divergence
+    // Return values intentionally ignored - we don't need to track if flags were previously set
     if (has_gap_uncertainty_for(os, Source::Primary)) {
-        clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
+        (void)clear_gap_uncertainty(os, Source::Primary, primary_seq_tracker_);
     }
     if (has_gap_uncertainty_for(os, Source::DropCopy)) {
-        clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
+        (void)clear_gap_uncertainty(os, Source::DropCopy, dropcopy_seq_tracker_);
     }
 }
 
