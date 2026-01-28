@@ -348,8 +348,15 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         return;
     }
 
-    // Re-check mismatch at expiration time
-    const MismatchMask mismatch = compute_mismatch(*os);
+    // Additional safety check: only process if order is in a state expecting timer callback.
+    // This protects against edge cases where state changed without timer cancellation.
+    if (os->recon_state != ReconState::InGrace && os->recon_state != ReconState::SuppressedByGap) {
+        ++counters_.stale_timers_skipped;
+        return;
+    }
+
+    // Re-check mismatch at expiration time (use same tolerances as main reconciliation path)
+    const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
     const std::uint64_t now = last_poll_tsc_;  // Use last known time
 
     if (mismatch.none()) {
@@ -406,9 +413,10 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
 
     if (!divergence_ring_.try_push(div)) {
         ++counters_.divergence_ring_drops;
+        return;  // Don't record emission if push failed - prevents dedup suppressing future attempts
     }
 
-    // Record emission for deduplication
+    // Record emission for deduplication (only after successful push)
     record_divergence_emission(os, mismatch, now_tsc);
 }
 
