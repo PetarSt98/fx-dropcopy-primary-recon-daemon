@@ -149,10 +149,12 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
     // FX-7054: Mark orders affected by open gaps using per-session epoch tracking
     // Note: mark_gap_uncertainty() internally increments orders_in_gap_count
-    if (ev.source == Source::Primary && primary_seq_tracker_.gap_open) {
+    // IMPORTANT: Mark order if ANY gap is open (not just the event's source), because
+    // reconciliation between Primary and DropCopy can be affected by gaps on either side.
+    if (primary_seq_tracker_.gap_open) {
         mark_gap_uncertainty(*st, Source::Primary, primary_seq_tracker_);
     }
-    if (ev.source == Source::DropCopy && dropcopy_seq_tracker_.gap_open) {
+    if (dropcopy_seq_tracker_.gap_open) {
         mark_gap_uncertainty(*st, Source::DropCopy, dropcopy_seq_tracker_);
     }
 
