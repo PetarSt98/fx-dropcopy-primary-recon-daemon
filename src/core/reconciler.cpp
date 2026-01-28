@@ -148,9 +148,8 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
     // Mark orders affected by open gaps for suppression
     if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->gap_suppression_epoch = static_cast<std::uint16_t>(
-            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFFFF
-        );
+        st->gap_suppression_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                             dropcopy_seq_tracker_.gap_epoch);
     }
 
     // === Update appropriate view ===
@@ -291,9 +290,8 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
 
     // Only suppress if the order was affected by the CURRENT gap epoch.
     // This prevents incorrectly suppressing orders from old gaps when a new gap opens.
-    const std::uint16_t current_max_epoch = static_cast<std::uint16_t>(
-        std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch)
-    );
+    const std::uint32_t current_max_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                                     dropcopy_seq_tracker_.gap_epoch);
     
     // Order must have been flagged during the current gap epoch AND a gap must still be open
     if (os.gap_suppression_epoch != current_max_epoch) {

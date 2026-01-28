@@ -31,7 +31,8 @@ struct SequenceTracker {
     std::uint64_t gap_start_seq{0};
     std::uint64_t gap_end_seq{0};       // End of gap range (exclusive) - seq we jumped to
     std::uint64_t gap_detected_tsc{0};  // TSC when gap was detected (for timeout)
-    std::uint16_t gap_epoch{0};         // Incremented each time a new gap is detected (FX-7053)
+    std::uint32_t gap_epoch{0};         // Incremented each time a new gap is detected (FX-7053)
+                                        // Using uint32_t to avoid wrap-around issues (would require 4B+ gaps)
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
