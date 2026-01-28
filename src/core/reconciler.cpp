@@ -148,9 +148,8 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
     // Mark orders affected by open gaps for suppression
     if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->gap_suppression_epoch = static_cast<std::uint16_t>(
-            std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch) & 0xFFFF
-        );
+        st->gap_suppression_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                             dropcopy_seq_tracker_.gap_epoch);
     }
 
     // === Update appropriate view ===
@@ -291,9 +290,8 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
 
     // Only suppress if the order was affected by the CURRENT gap epoch.
     // This prevents incorrectly suppressing orders from old gaps when a new gap opens.
-    const std::uint16_t current_max_epoch = static_cast<std::uint16_t>(
-        std::max(primary_seq_tracker_.gap_epoch, dropcopy_seq_tracker_.gap_epoch)
-    );
+    const std::uint32_t current_max_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                                     dropcopy_seq_tracker_.gap_epoch);
     
     // Order must have been flagged during the current gap epoch AND a gap must still be open
     if (os.gap_suppression_epoch != current_max_epoch) {
@@ -350,8 +348,15 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         return;
     }
 
-    // Re-check mismatch at expiration time
-    const MismatchMask mismatch = compute_mismatch(*os);
+    // Additional safety check: only process if order is in a state expecting timer callback.
+    // This protects against edge cases where state changed without timer cancellation.
+    if (os->recon_state != ReconState::InGrace && os->recon_state != ReconState::SuppressedByGap) {
+        ++counters_.stale_timers_skipped;
+        return;
+    }
+
+    // Re-check mismatch at expiration time (use same tolerances as main reconciliation path)
+    const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
     const std::uint64_t now = last_poll_tsc_;  // Use last known time
 
     if (mismatch.none()) {
@@ -408,9 +413,10 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
 
     if (!divergence_ring_.try_push(div)) {
         ++counters_.divergence_ring_drops;
+        return;  // Don't record emission if push failed - prevents dedup suppressing future attempts
     }
 
-    // Record emission for deduplication
+    // Record emission for deduplication (only after successful push)
     record_divergence_emission(os, mismatch, now_tsc);
 }
 
