@@ -48,6 +48,8 @@ struct ReconCounters {
     std::uint64_t divergence_deduped{0};      // Divergences suppressed (same mismatch within window)
     std::uint64_t stale_timers_skipped{0};    // Timer callbacks skipped (generation mismatch)
     std::uint64_t gap_suppressions{0};        // Divergences suppressed due to open sequence gaps
+    std::uint64_t gaps_closed{0};             // FX-7054: Gap closure events (timeout or admin)
+    std::uint64_t gap_timeouts{0};            // FX-7054: Gaps closed due to timeout
     std::uint64_t timer_overflow{0};          // Timer wheel bucket overflow events (FX-7053 Part 3)
     std::uint64_t divergence_resolved{0};     // Confirmed divergences that later resolved
     std::uint64_t gaps_closed_by_timeout{0};  // Sequence gaps closed due to timeout
@@ -148,9 +150,15 @@ public:
     // Must be called before poll_expired to prevent infinite reschedule loops
     void set_last_poll_tsc_for_test(std::uint64_t tsc) noexcept { last_poll_tsc_ = tsc; }
 
+    // FX-7054: Administrative gap closure (for testing and manual intervention)
+    void close_session_gap(Source source) noexcept;
+
 private:
     void process_event(const ExecEvent& ev) noexcept;
     void increment_divergence_counter(DivergenceType type) noexcept;
+    
+    // FX-7054: Gap management
+    void check_gap_timeouts(std::uint64_t now_tsc) noexcept;
 
     static constexpr std::int64_t qty_tolerance_ = 0;
     static constexpr std::int64_t px_tolerance_ = 0;

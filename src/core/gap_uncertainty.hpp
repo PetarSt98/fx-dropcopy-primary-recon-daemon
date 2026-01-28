@@ -115,4 +115,45 @@ inline void mark_gap_uncertainty(
     return clear_gap_uncertainty(os, source, &tracker);
 }
 
+// ===== FX-7054 Part 2: Gap suppression check for reconciler =====
+// Check if an order's reconciliation should be suppressed due to an open gap.
+// Returns true if:
+//   1. The order has the gap uncertainty flag set for this source, AND
+//   2. The tracker's gap is currently open, AND
+//   3. The order's gap_suppression_epoch matches the tracker's current gap_epoch
+//
+// The epoch check ensures that if a gap was closed and a new gap opened,
+// orders marked during the old gap are NOT suppressed by the new gap.
+//
+// This is an O(1) check suitable for hot-path use.
+//
+// @param os The order state to check
+// @param source The source (Primary or DropCopy) to check
+// @param tracker The sequence tracker for the source
+// @return true if this order should have divergence suppressed due to an open gap
+[[nodiscard]] inline bool is_suppressed_by_gap(
+    const OrderState& os,
+    Source source,
+    const SequenceTracker& tracker
+) noexcept {
+    // No suppression if gap is not open
+    if (!tracker.gap_open) {
+        return false;
+    }
+    
+    const std::uint8_t flag = get_gap_flag_for_source(source);
+    
+    // Check if order has this source's gap flag set
+    if ((os.gap_uncertainty_flags & flag) == 0) {
+        return false;
+    }
+    
+    // Verify epoch matches to handle gap closure/reopen scenarios.
+    // Order must be marked with the CURRENT gap's epoch to be suppressed.
+    // Note: We use a single gap_suppression_epoch field (set by mark_gap_uncertainty)
+    // since orders are typically affected by one gap at a time, and the flag bits
+    // already track which sources have gap uncertainty.
+    return os.gap_suppression_epoch == tracker.gap_epoch;
+}
+
 } // namespace core
