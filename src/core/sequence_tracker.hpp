@@ -28,13 +28,19 @@ struct SequenceTracker {
     std::uint64_t last_seen_seq{0};
     bool initialized{false};
     bool gap_open{false};
-    std::uint64_t gap_start_seq{0};
+  
+    std::uint64_t gap_start_seq{0};      // First missing sequence (EXISTING)
+    std::uint32_t gap_epoch{0};          // Incremented each time a new gap is detected (FX-7053)
+                                         // Using uint32_t to avoid wrap-around issues (would require 4B+ gaps)
+                                         // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged").
+                                         // Epochs start at 1 and skip 0 on wrap-around.
+
+    // ===== FX-7054: Enhanced gap lifecycle tracking =====
+    std::uint64_t gap_opened_tsc{0};        // When gap was first detected (TSC cycles)
+    std::uint64_t gap_last_missing_seq{0};  // Last missing sequence (inclusive, gap_start_seq is first)
+    std::uint32_t orders_in_gap_count{0};   // Count of orders marked with this gap's uncertainty
     std::uint64_t gap_end_seq{0};       // End of gap range (exclusive) - seq we jumped to
     std::uint64_t gap_detected_tsc{0};  // TSC when gap was detected (for timeout)
-    std::uint32_t gap_epoch{0};         // Incremented each time a new gap is detected (FX-7053)
-                                        // Using uint32_t to avoid wrap-around issues (would require 4B+ gaps)
-                                        // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged").
-                                        // Epochs start at 1 and skip 0 on wrap-around.
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
@@ -46,17 +52,42 @@ inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq)
     trk.expected_seq = first_seq + 1;
     trk.gap_open = false;
     trk.gap_start_seq = 0;
+    trk.gap_epoch = 0;  // FX-7054: Explicit reset for consistency
+    // FX-7054: Initialize new gap lifecycle fields
+    trk.gap_opened_tsc = 0;
+    trk.gap_last_missing_seq = 0;
+    trk.orders_in_gap_count = 0;
     trk.gap_end_seq = 0;
     trk.gap_detected_tsc = 0;
     return true;
 }
 
-// Close the gap explicitly (e.g., after timeout or gap fill detection)
-inline void close_gap(SequenceTracker& trk) noexcept {
+// ===== FX-7054: Explicit gap closure function =====
+// Explicitly close a gap (called when gap is administratively resolved or timed out).
+// Returns true if gap was open, false if already closed.
+// Rationale: Gap closure should be **explicit** (timeout or admin action), not automatic.
+// In FX, gaps often resolve administratively, not by receiving missing messages.
+//
+// IMPORTANT: This resets orders_in_gap_count to 0 to prevent counter corruption.
+// Orders with flags from this gap should have their flags cleared BEFORE calling
+// close_gap(), or use clear_gap_uncertainty() with tracker=nullptr for cleanup.
+inline bool close_gap(SequenceTracker& trk) noexcept {
+    if (!trk.gap_open) {
+        return false;
+    }
+
     trk.gap_open = false;
     trk.gap_start_seq = 0;
+    // Master branch fields
     trk.gap_end_seq = 0;
     trk.gap_detected_tsc = 0;
+    // FX-7054 fields
+    trk.gap_opened_tsc = 0;
+    trk.gap_last_missing_seq = 0;
+    trk.orders_in_gap_count = 0;  // Reset to prevent corruption on next gap
+    // Note: gap_epoch preserved for historical tracking
+
+    return true;
 }
 
 inline bool track_sequence(SequenceTracker& trk,
@@ -78,18 +109,32 @@ inline bool track_sequence(SequenceTracker& trk,
 
     if (seq > trk.expected_seq) {
         const std::uint64_t expected_before = trk.expected_seq;
-        trk.gap_open = true;
-        trk.gap_start_seq = trk.expected_seq;
+
+        // Open or extend gap
+        if (!trk.gap_open) {
+            // NEW gap detected - only increment epoch here
+            // BEHAVIORAL CHANGE (FX-7054): gap_epoch now increments only on NEW gaps,
+            // not on gap extensions. This allows callers to distinguish between a new
+            // gap event vs. an existing gap growing larger.
+            trk.gap_open = true;
+            trk.gap_start_seq = trk.expected_seq;
+            trk.gap_opened_tsc = now_ts;           // FX-7054: Record detection time
+            trk.orders_in_gap_count = 0;           // FX-7054: Reset counter for new gap
+            // Increment epoch each time a new gap is detected (FX-7053)
+            // Skip 0 on wrap-around since 0 is reserved as sentinel ("not flagged")
+            ++trk.gap_epoch;
+            if (trk.gap_epoch == 0) {
+                trk.gap_epoch = 1;  // Skip sentinel value
+            }
+        }
+
+        // Update last missing (gap may be extending)
+        trk.gap_last_missing_seq = seq - 1;        // FX-7054
+
         trk.gap_end_seq = seq;  // The sequence we jumped to (exclusive end of gap)
         trk.gap_detected_tsc = now_ts;  // Record when gap was detected for timeout
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
-        // Increment epoch each time a new gap is detected (FX-7053)
-        // Skip 0 on wrap-around since 0 is reserved as sentinel ("not flagged")
-        ++trk.gap_epoch;
-        if (trk.gap_epoch == 0) {
-            trk.gap_epoch = 1;  // Skip sentinel value
-        }
 
         if (out_event) {
             out_event->source = source;

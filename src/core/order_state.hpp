@@ -76,7 +76,14 @@ struct OrderState {
 
     std::uint32_t timer_generation{0};    // generation-based lazy cancel
     std::uint32_t gap_suppression_epoch{0};  // Using uint32_t to match SequenceTracker::gap_epoch
-                                             // and avoid wrap-around issues (would require 4B+ gaps)
+                                             // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged")
+
+    // ===== FX-7054: Per-order gap uncertainty flags =====
+    // Bitmask indicating which session gaps affect this order's reconciliation
+    // Bit 0: Primary session gap uncertainty
+    // Bit 1: DropCopy session gap uncertainty
+    // Bits 2-7: Reserved for additional sessions
+    std::uint8_t gap_uncertainty_flags{0};
 
     // ===== Divergence emission tracking (FX-7053) =====
     // These fields support idempotent divergence emission to avoid flooding
@@ -304,5 +311,37 @@ inline void record_divergence_emission(
 
 static_assert(sizeof(OrderState) <= 256, "OrderState exceeds cache-friendly size limit");
 static_assert(std::is_trivially_copyable_v<OrderState>, "OrderState must remain trivially copyable");
+
+// ===== FX-7054: Gap uncertainty flag bits =====
+namespace GapUncertaintyFlags {
+    constexpr std::uint8_t NONE     = 0u;
+    constexpr std::uint8_t PRIMARY  = 1u << 0;  // Bit 0
+    constexpr std::uint8_t DROPCOPY = 1u << 1;  // Bit 1
+    // Bits 2-7 reserved for future multi-session support
+}
+
+// ===== FX-7054: Gap uncertainty query functions =====
+// These functions only read from OrderState and don't need SequenceTracker.
+// For functions that modify both OrderState and SequenceTracker, see gap_uncertainty.hpp
+
+// Check if order has any gap uncertainty flags set
+[[nodiscard]] inline bool has_gap_uncertainty(const OrderState& os) noexcept {
+    return os.gap_uncertainty_flags != GapUncertaintyFlags::NONE;
+}
+
+// Check if order has gap uncertainty for specific source
+[[nodiscard]] inline bool has_gap_uncertainty_for(const OrderState& os, Source source) noexcept {
+    const std::uint8_t flag = (source == Source::Primary)
+        ? GapUncertaintyFlags::PRIMARY
+        : GapUncertaintyFlags::DROPCOPY;
+    return (os.gap_uncertainty_flags & flag) != 0;
+}
+
+// Clear all gap uncertainty (e.g., when order is confirmed matched)
+// Note: For clearing a single source with tracker count adjustment, use gap_uncertainty.hpp
+inline void clear_all_gap_uncertainty(OrderState& os) noexcept {
+    os.gap_uncertainty_flags = GapUncertaintyFlags::NONE;
+    // Note: gap_suppression_epoch preserved for historical tracking
+}
 
 } // namespace core
