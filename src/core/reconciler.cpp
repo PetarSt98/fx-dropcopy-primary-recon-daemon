@@ -102,6 +102,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                 ++counters_.primary_seq_gaps;
             } else if (gap_ev.kind == GapKind::Duplicate) {
                 ++counters_.primary_seq_duplicates;
+            } else if (gap_ev.kind == GapKind::GapFill) {
+                ++counters_.primary_seq_out_of_order;
+                ++counters_.gaps_closed_by_fill;
             } else {
                 ++counters_.primary_seq_out_of_order;
             }
@@ -111,11 +114,16 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                 ++counters_.dropcopy_seq_gaps;
             } else if (gap_ev.kind == GapKind::Duplicate) {
                 ++counters_.dropcopy_seq_duplicates;
+            } else if (gap_ev.kind == GapKind::GapFill) {
+                ++counters_.dropcopy_seq_out_of_order;
+                ++counters_.gaps_closed_by_fill;
             } else {
                 ++counters_.dropcopy_seq_out_of_order;
             }
             break;
         }
+
+        // Note: gaps_closed_by_fill is incremented in the switch above when kind == GapFill
 
         if (!seq_gap_ring_.try_push(gap_ev)) {
             ++counters_.sequence_gap_ring_drops;
@@ -146,6 +154,10 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
     }
     if (ev.source == Source::DropCopy && dropcopy_seq_tracker_.gap_open) {
         mark_gap_uncertainty(*st, Source::DropCopy, dropcopy_seq_tracker_);
+    // Mark orders affected by open gaps for suppression
+    if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
+        st->gap_suppression_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                             dropcopy_seq_tracker_.gap_epoch);
     }
 
     // === Update appropriate view ===
@@ -259,7 +271,7 @@ void Reconciler::run() {
 
 // ===== Two-stage pipeline helper implementations (FX-7053) =====
 
-bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
+bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
     if (!config_.enable_gap_suppression) {
         return false;
     }
@@ -274,7 +286,42 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) const noexcept {
         return true;
     }
 
-    return false;
+    const std::uint64_t now = last_poll_tsc_;
+    const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
+
+    // Check primary gap - close if timed out
+    if (primary_seq_tracker_.gap_open) {
+        if (primary_seq_tracker_.gap_detected_tsc > 0 &&
+            now > primary_seq_tracker_.gap_detected_tsc &&
+            (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+            // Gap has timed out - close it
+            close_gap(primary_seq_tracker_);
+            ++counters_.gaps_closed_by_timeout;
+        }
+    }
+
+    // Check dropcopy gap - close if timed out
+    if (dropcopy_seq_tracker_.gap_open) {
+        if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
+            now > dropcopy_seq_tracker_.gap_detected_tsc &&
+            (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+            // Gap has timed out - close it
+            close_gap(dropcopy_seq_tracker_);
+            ++counters_.gaps_closed_by_timeout;
+        }
+    }
+
+    // Only suppress if the order was affected by the CURRENT gap epoch.
+    // This prevents incorrectly suppressing orders from old gaps when a new gap opens.
+    const std::uint32_t current_max_epoch = std::max(primary_seq_tracker_.gap_epoch, 
+                                                     dropcopy_seq_tracker_.gap_epoch);
+    
+    // Order must have been flagged during the current gap epoch AND a gap must still be open
+    if (os.gap_suppression_epoch != current_max_epoch) {
+        return false;
+    }
+
+    return primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open;
 }
 
 void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
@@ -332,8 +379,15 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         return;
     }
 
-    // Re-check mismatch at expiration time
-    const MismatchMask mismatch = compute_mismatch(*os);
+    // Additional safety check: only process if order is in a state expecting timer callback.
+    // This protects against edge cases where state changed without timer cancellation.
+    if (os->recon_state != ReconState::InGrace && os->recon_state != ReconState::SuppressedByGap) {
+        ++counters_.stale_timers_skipped;
+        return;
+    }
+
+    // Re-check mismatch at expiration time (use same tolerances as main reconciliation path)
+    const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
     const std::uint64_t now = last_poll_tsc_;  // Use last known time
 
     if (mismatch.none()) {
@@ -390,9 +444,10 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
 
     if (!divergence_ring_.try_push(div)) {
         ++counters_.divergence_ring_drops;
+        return;  // Don't record emission if push failed - prevents dedup suppressing future attempts
     }
 
-    // Record emission for deduplication
+    // Record emission for deduplication (only after successful push)
     record_divergence_emission(os, mismatch, now_tsc);
     
     // FX-7054: Clear gap uncertainty after confirmed divergence
@@ -411,11 +466,25 @@ void Reconciler::handle_recon_state_transition(
 ) noexcept {
     switch (os.recon_state) {
         case ReconState::Unknown:
-            // First event - determine initial state
+            // First event - determine initial state and schedule timer if needed
             if (os.seen_internal && !os.seen_dropcopy) {
-                os.recon_state = ReconState::AwaitingDropCopy;
+                // Internal seen first; either await dropcopy or enter grace on mismatch
+                if (new_mismatch.any()) {
+                    // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                    // This ensures we emit divergence if dropcopy never arrives
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::AwaitingDropCopy;
+                }
             } else if (os.seen_dropcopy && !os.seen_internal) {
-                os.recon_state = ReconState::AwaitingPrimary;
+                // Dropcopy seen first; either await primary or enter grace on mismatch
+                if (new_mismatch.any()) {
+                    // Schedule grace timer for EXISTENCE mismatch (per FX-7053 spec)
+                    // This ensures we emit divergence if primary never arrives
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                } else {
+                    os.recon_state = ReconState::AwaitingPrimary;
+                }
             } else if (both_sides_seen(os)) {
                 // Both sides seen on first event (unusual but handle it)
                 if (new_mismatch.any()) {
@@ -436,6 +505,12 @@ void Reconciler::handle_recon_state_transition(
                     os.recon_state = ReconState::Matched;
                     ++counters_.orders_matched;
                 }
+            } else if (new_mismatch.any()) {
+                // Still waiting for primary, but ensure timer is scheduled
+                // (handles edge case where first event didn't schedule timer)
+                if (os.recon_deadline_tsc == 0) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
+                }
             }
             break;
 
@@ -447,6 +522,12 @@ void Reconciler::handle_recon_state_transition(
                 } else {
                     os.recon_state = ReconState::Matched;
                     ++counters_.orders_matched;
+                }
+            } else if (new_mismatch.any()) {
+                // Still waiting for dropcopy, but ensure timer is scheduled
+                // (handles edge case where first event didn't schedule timer)
+                if (os.recon_deadline_tsc == 0) {
+                    enter_grace_period(os, new_mismatch, now_tsc);
                 }
             }
             break;
