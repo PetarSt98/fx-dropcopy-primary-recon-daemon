@@ -154,10 +154,6 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
     }
     if (ev.source == Source::DropCopy && dropcopy_seq_tracker_.gap_open) {
         mark_gap_uncertainty(*st, Source::DropCopy, dropcopy_seq_tracker_);
-    // Mark orders affected by open gaps for suppression
-    if (primary_seq_tracker_.gap_open || dropcopy_seq_tracker_.gap_open) {
-        st->gap_suppression_epoch = std::max(primary_seq_tracker_.gap_epoch, 
-                                             dropcopy_seq_tracker_.gap_epoch);
     }
 
     // === Update appropriate view ===
