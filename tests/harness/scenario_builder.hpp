@@ -170,9 +170,9 @@ private:
     std::uint64_t grace_period_ns_{500'000'000};  // 500ms default
     Timestamp current_ts_{0};
     Timestamp initial_ts_{0};
-    mutable SeqNo primary_seq_{0};
-    mutable SeqNo dropcopy_seq_{0};
-    mutable std::uint64_t exec_id_counter_{0};
+    SeqNo primary_seq_{0};
+    SeqNo dropcopy_seq_{0};
+    std::uint64_t exec_id_counter_{0};
 };
 
 } // namespace test

@@ -140,9 +140,15 @@ public:
         }
         
         // Final timer poll to catch any pending expirations
-        // Use current timestamp + 1 to ensure we process everything up to current_ts
+        // Use the scenario's current timestamp (which may be advanced beyond last event)
+        std::uint64_t final_ts = scenario.current_timestamp();
+        if (final_ts > current_ts) {
+            current_ts = final_ts;
+        }
+        
+        // Poll at the final timestamp to process any expired timers
         if (current_ts > 0) {
-            harness.poll_timers(current_ts + 1);
+            harness.poll_timers(current_ts);
         }
         
         // Collect results
