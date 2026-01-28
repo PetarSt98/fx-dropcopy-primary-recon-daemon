@@ -694,21 +694,36 @@ TEST_F(ReconcilerTwoStageTest, IsGapSuppressed_EpochMaskingConsistency) {
         &h.timer_wheel,
         h.config);
     
-    // Create an order state with a gap_suppression_epoch that when masked with 0xFFFF
-    // equals a large epoch value
-    core::OrderState os{};
-    os.key = 12345;
-    os.gap_suppression_epoch = 0xFFFE;  // Large epoch near max uint16_t
+    const std::uint64_t ts = 1'000'000'000;
     
-    // Without an open gap, should return false regardless of epoch
-    EXPECT_FALSE(h.reconciler->is_gap_suppressed(os));
+    // Initialize sequence tracker with seq=1
+    auto init_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 100, ts, "INIT_ORDER", "EX_INIT");
+    init_ev.seq_num = 1;
+    h.reconciler->process_event_for_test(init_ev);
     
-    // Create an order with gap_suppression_epoch = 1
-    core::OrderState os2{};
-    os2.key = 12346;
-    os2.gap_suppression_epoch = 1;
+    // Create a sequence gap by jumping from seq 1 to seq 5 (missing 2, 3, 4)
+    // This will open a gap in the dropcopy sequence tracker
+    auto gap_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 100, ts + 1, "GAP_ORDER", "EX_GAP");
+    gap_ev.seq_num = 5;
+    h.reconciler->process_event_for_test(gap_ev);
     
-    EXPECT_FALSE(h.reconciler->is_gap_suppressed(os2));
+    // Verify gap was detected
+    EXPECT_EQ(h.counters.dropcopy_seq_gaps, 1u);
+    
+    // Now create an order affected by this gap - it should have gap_suppression_epoch set
+    auto affected_ev = make_event(core::Source::Primary, core::OrdStatus::Working, 100, 100, ts + 2, "AFFECTED_ORDER", "EX_AFF");
+    affected_ev.seq_num = 1;
+    h.reconciler->process_event_for_test(affected_ev);
+    
+    core::OrderKey key = core::make_order_key(affected_ev);
+    core::OrderState* os = h.store.find(key);
+    ASSERT_NE(os, nullptr);
+    
+    // The order should have gap_suppression_epoch set (since gap is open)
+    EXPECT_GT(os->gap_suppression_epoch, 0u);
+    
+    // Verify is_gap_suppressed returns true for this order (gap is still open)
+    EXPECT_TRUE(h.reconciler->is_gap_suppressed(*os));
 }
 
 // 15. OnDeadlineExpired_SkipsWhenStateNotInGrace - Timer skipped if state changed
@@ -745,7 +760,10 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_SkipsWhenStateNotInGrace) {
 }
 
 // 16. OnDeadlineExpired_RespectsQtyTolerance - Timer callback uses configured tolerances
-// This test verifies that the timer callback respects qty_tolerance configuration.
+// This test verifies that the timer callback respects qty_tolerance configuration by:
+// 1. Creating a mismatch outside tolerance to enter grace period
+// 2. Updating state to be within tolerance
+// 3. Firing timer to verify it re-checks with tolerance and resolves as false positive
 TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_RespectsQtyTolerance) {
     TwoStageHarness h;
     h.config.qty_tolerance = 10;  // Allow up to 10 units difference
@@ -769,18 +787,32 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_RespectsQtyTolerance) {
     auto primary_ev = make_event(core::Source::Primary, core::OrdStatus::Working, 100, 100, ts, "CID_TOL", "EX_TOL");
     h.reconciler->process_event_for_test(primary_ev);
     
-    // Dropcopy with qty=105 (within 10 unit tolerance)
-    auto dropcopy_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 105, 100, ts + 1, "CID_TOL", "EX_TOL");
+    // Dropcopy with qty=80 (20 unit difference, OUTSIDE 10 unit tolerance)
+    // This should trigger grace period
+    auto dropcopy_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 80, 100, ts + 1, "CID_TOL", "EX_TOL");
     h.reconciler->process_event_for_test(dropcopy_ev);
     
     core::OrderKey key = core::make_order_key(primary_ev);
     core::OrderState* os = h.store.find(key);
     ASSERT_NE(os, nullptr);
     
-    // The order should be matched (within tolerance) so no grace period entered after dropcopy
-    // Both sides are seen and within tolerance → should be Matched
+    // Verify order is in grace due to mismatch outside tolerance
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
+    EXPECT_EQ(h.counters.mismatch_observed, 1u);
+    
+    // Save timer generation
+    std::uint32_t gen = os->timer_generation;
+    
+    // Manually update dropcopy qty to be within tolerance (95, difference of 5)
+    os->dropcopy_cum_qty = 95;
+    
+    // Fire timer - it should re-check mismatch with tolerance and find no mismatch
+    h.reconciler->on_grace_deadline_expired(key, gen);
+    
+    // Verify false positive was avoided (mismatch resolved within tolerance)
     EXPECT_EQ(os->recon_state, core::ReconState::Matched);
-    EXPECT_EQ(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.false_positive_avoided, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
 }
 
 // 17. OnDeadlineExpired_RespectsPxTolerance - Timer callback uses configured price tolerance
@@ -807,66 +839,56 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_RespectsPxTolerance) {
     auto primary_ev = make_event(core::Source::Primary, core::OrdStatus::Working, 50, 100, ts, "CID_PX", "EX_PX");
     h.reconciler->process_event_for_test(primary_ev);
     
-    // Dropcopy with price=103 (within 5 unit tolerance)
-    auto dropcopy_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 50, 103, ts + 1, "CID_PX", "EX_PX");
+    // Dropcopy with price=90 (10 unit difference, OUTSIDE 5 unit tolerance)
+    auto dropcopy_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working, 50, 90, ts + 1, "CID_PX", "EX_PX");
     h.reconciler->process_event_for_test(dropcopy_ev);
     
     core::OrderKey key = core::make_order_key(primary_ev);
     core::OrderState* os = h.store.find(key);
     ASSERT_NE(os, nullptr);
     
-    // Should be Matched (within tolerance)
+    // Verify order is in grace due to price mismatch outside tolerance
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
+    EXPECT_EQ(h.counters.mismatch_observed, 1u);
+    
+    // Save timer generation
+    std::uint32_t gen = os->timer_generation;
+    
+    // Manually update dropcopy price to be within tolerance (97, difference of 3)
+    os->dropcopy_avg_px = 97;
+    
+    // Fire timer - it should re-check mismatch with tolerance and find no mismatch
+    h.reconciler->on_grace_deadline_expired(key, gen);
+    
+    // Verify false positive was avoided (mismatch resolved within tolerance)
     EXPECT_EQ(os->recon_state, core::ReconState::Matched);
-    EXPECT_EQ(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.false_positive_avoided, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
 }
 
 // 18. EmitConfirmedDivergence_NoRecordOnPushFailure - Dedup not triggered after failed push
 // This test verifies that when divergence_ring push fails, the emission is not recorded
 // for deduplication, so subsequent attempts are not incorrectly suppressed.
+// We test this by pre-filling the divergence ring to capacity.
 TEST_F(ReconcilerTwoStageTest, EmitConfirmedDivergence_NoRecordOnPushFailure) {
-    // Use a small-capacity divergence ring (capacity 2, so only 1 element can be stored)
-    using SmallDivergenceRing = ingest::SpscRing<core::Divergence, 2>;
-    
-    std::atomic<bool> stop_flag{false};
-    auto primary_ring = std::make_unique<ExecRing>();
-    auto dropcopy_ring = std::make_unique<ExecRing>();
-    auto small_divergence_ring = std::make_unique<SmallDivergenceRing>();
-    auto seq_gap_ring = std::make_unique<core::SequenceGapRing>();
-    util::Arena arena{util::Arena::default_capacity_bytes};
-    core::OrderStateStore store{arena, 128};
-    core::ReconCounters counters{};
-    util::WheelTimer timer_wheel{0};
-    core::ReconConfig config{};
-    config.enable_windowed_recon = true;
-    config.divergence_dedup_window_ns = 10'000'000'000ULL;  // 10s dedup window
-    
-    // Pre-fill the small ring to capacity (1 element, since capacity=2 means 1 usable slot)
-    core::Divergence dummy_div{};
-    ASSERT_TRUE(small_divergence_ring->try_push(dummy_div));
-    // Ring is now full (head=1, tail=0, next push would make head=0 == tail)
-    
-    // Create an order state for testing
-    core::OrderState os{};
-    os.key = 99999;
-    os.seen_internal = true;
-    os.seen_dropcopy = true;
-    os.internal_status = core::OrdStatus::Working;
-    os.dropcopy_status = core::OrdStatus::Filled;  // Status mismatch
-    os.internal_cum_qty = 100;
-    os.dropcopy_cum_qty = 100;
-    
-    core::MismatchMask mismatch{};
-    mismatch.set(core::MismatchMask::STATUS);
-    
-    // Create a reconciler that uses the small ring
-    // Note: We can't easily inject a small ring into Reconciler due to type mismatch,
-    // so we'll test the logic by checking counters after manual simulation
-    
-    // Instead, test via the existing harness by triggering multiple divergences
     TwoStageHarness h;
+    h.config.divergence_dedup_window_ns = 10'000'000'000ULL;  // 10s dedup window
+    
+    // Recreate reconciler with dedup config
+    h.reconciler = std::make_unique<core::Reconciler>(
+        h.stop_flag,
+        *h.primary_ring,
+        *h.dropcopy_ring,
+        h.store,
+        h.counters,
+        *h.divergence_ring,
+        *h.seq_gap_ring,
+        &h.timer_wheel,
+        h.config);
+    
     const std::uint64_t ts = 1'000'000'000;
     
-    // First, create a divergence that should be emitted
+    // First, create an order with mismatch
     auto primary_ev = make_event(core::Source::Primary, core::OrdStatus::Working, 100, 100, ts, "CID_DEDUP", "EX_DEDUP");
     h.reconciler->process_event_for_test(primary_ev);
     
@@ -874,21 +896,41 @@ TEST_F(ReconcilerTwoStageTest, EmitConfirmedDivergence_NoRecordOnPushFailure) {
     h.reconciler->process_event_for_test(dropcopy_ev);
     
     core::OrderKey key = core::make_order_key(primary_ev);
-    core::OrderState* order_state = h.store.find(key);
-    ASSERT_NE(order_state, nullptr);
-    EXPECT_EQ(order_state->recon_state, core::ReconState::InGrace);
+    core::OrderState* os = h.store.find(key);
+    ASSERT_NE(os, nullptr);
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
     
-    // Trigger timer expiration to confirm divergence
-    h.reconciler->on_grace_deadline_expired(key, order_state->timer_generation);
+    // Pre-fill the divergence ring to capacity (minus 1 for safety)
+    // DivergenceRing capacity is 1 << 16 = 65536
+    const std::size_t fill_count = h.divergence_ring->capacity() - 1;
+    for (std::size_t i = 0; i < fill_count; ++i) {
+        core::Divergence dummy{};
+        dummy.key = i;
+        if (!h.divergence_ring->try_push(dummy)) {
+            break;  // Ring is full
+        }
+    }
     
-    // Verify divergence was emitted
-    EXPECT_EQ(h.counters.mismatch_confirmed, 1u);
-    EXPECT_EQ(h.counters.divergence_ring_drops, 0u);
+    // Verify ring is full or nearly full
+    EXPECT_GE(h.divergence_ring->size_approx(), fill_count - 1);
     
-    // Verify the divergence is in the ring
-    core::Divergence div{};
-    EXPECT_TRUE(h.divergence_ring->try_pop(div));
-    EXPECT_EQ(div.key, key);
+    // Now try to emit divergence - this should fail due to full ring
+    core::MismatchMask mismatch{};
+    mismatch.set(core::MismatchMask::CUM_QTY);
+    
+    // Capture initial state
+    const std::uint64_t initial_emit_tsc = os->last_divergence_emit_tsc;
+    const std::uint64_t emit_time = ts + 1000;
+    
+    // This emission will fail because ring is full
+    h.reconciler->emit_confirmed_divergence(*os, mismatch, emit_time);
+    
+    // Verify divergence_ring_drops was incremented
+    EXPECT_GE(h.counters.divergence_ring_drops, 1u);
+    
+    // Key verification: last_divergence_emit_tsc should NOT have been updated
+    // because the push failed and we returned early (the bug fix)
+    EXPECT_EQ(os->last_divergence_emit_tsc, initial_emit_tsc);
 }
 
 // 19. EmitConfirmedDivergence_DeduplicationWorksAfterSuccessfulPush
