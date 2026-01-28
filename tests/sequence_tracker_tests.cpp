@@ -139,4 +139,80 @@ TEST(SequenceTrackerTest, OutOfOrderOutsideGapRange) {
     EXPECT_TRUE(trk.gap_open);  // Gap should still be open
 }
 
+// Test that gap_epoch increments past 65535 without wrapping (uint32_t fix)
+TEST(SequenceTrackerTest, GapEpochDoesNotWrapAt65535) {
+    core::SequenceTracker trk{};
+    core::SequenceGapEvent evt{};
+    
+    // Initialize tracker
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    
+    // Simulate 65,536 gaps (old uint16_t would wrap at 65535→0)
+    // Start epoch at 65534 to test the boundary
+    trk.gap_epoch = 65534;
+    
+    // Create first gap - epoch should go to 65535
+    std::uint64_t seq = 10;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, seq, 100, &evt));
+    EXPECT_EQ(trk.gap_epoch, 65535u);
+    
+    // Close gap and create another - epoch should go to 65536 (not wrap to 0)
+    core::close_gap(trk);
+    trk.expected_seq = seq + 1;
+    seq = 20;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, seq, 200, &evt));
+    EXPECT_EQ(trk.gap_epoch, 65536u);  // Should be 65536, not 0
+    
+    // Continue past the old boundary
+    core::close_gap(trk);
+    trk.expected_seq = seq + 1;
+    seq = 30;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, seq, 300, &evt));
+    EXPECT_EQ(trk.gap_epoch, 65537u);
+}
+
+// Test that gap_epoch skips 0 (sentinel value) on wrap-around
+TEST(SequenceTrackerTest, GapEpochSkipsZeroOnWrapAround) {
+    core::SequenceTracker trk{};
+    core::SequenceGapEvent evt{};
+    
+    // Initialize tracker
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    
+    // Set epoch to max uint32_t - 1 to test wrap-around
+    trk.gap_epoch = 0xFFFFFFFE;  // 4294967294
+    
+    // First gap: epoch should go to 0xFFFFFFFF
+    std::uint64_t seq = 10;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, seq, 100, &evt));
+    EXPECT_EQ(trk.gap_epoch, 0xFFFFFFFFu);
+    
+    // Close gap and create another - epoch would wrap to 0, but should skip to 1
+    core::close_gap(trk);
+    trk.expected_seq = seq + 1;
+    seq = 20;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, seq, 200, &evt));
+    EXPECT_EQ(trk.gap_epoch, 1u);  // Should be 1, not 0 (0 is sentinel)
+}
+
+// Test that gap_epoch starts at 1 for first gap (not 0)
+TEST(SequenceTrackerTest, GapEpochStartsAtOneNotZero) {
+    core::SequenceTracker trk{};
+    core::SequenceGapEvent evt{};
+    
+    // Initialize tracker
+    ASSERT_TRUE(core::init_sequence_tracker(trk, 1));
+    EXPECT_EQ(trk.gap_epoch, 0u);  // No gaps yet, so 0 (sentinel)
+    
+    // Create first gap - epoch should be 1
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 5, 100, &evt));
+    EXPECT_EQ(trk.gap_epoch, 1u);  // First gap, epoch should be 1
+    
+    // Close and create another gap - epoch should be 2
+    core::close_gap(trk);
+    trk.expected_seq = 6;
+    EXPECT_TRUE(core::track_sequence(trk, core::Source::Primary, 0, 10, 200, &evt));
+    EXPECT_EQ(trk.gap_epoch, 2u);
+}
+
 } // namespace
