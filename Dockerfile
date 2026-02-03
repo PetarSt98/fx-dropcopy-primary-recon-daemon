@@ -33,7 +33,10 @@ RUN git clone --branch ${AERON_VERSION} --depth 1 https://github.com/real-logic/
         -DCMAKE_BUILD_TYPE=Release \
         -Daeron_BUILD_SAMPLES=OFF \
         -Daeron_BUILD_TESTS=OFF \
-    && cmake --build /tmp/aeron-build --parallel \
+        -DBUILD_AERON_DRIVER=ON \
+        -DBUILD_AERON_ARCHIVE_API=OFF \
+    && cmake --build /tmp/aeron-build --target aeron_client --parallel \
+    && cmake --build /tmp/aeron-build --target aeron_driver --parallel \
     && cmake --install /tmp/aeron-build --prefix /opt/aeron
 
 # Developer image: builds the project and keeps the build tree for tests/debugging
