@@ -251,5 +251,23 @@ gtest_discover_tests(integration_reconciler_windowed
   DISCOVERY_MODE PRE_TEST
 )
 
+# FX-7055: Determinism test executable
+add_executable(recon_determinism_tests
+    tests/recon_determinism_tests.cpp
+)
+target_include_directories(recon_determinism_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+target_link_libraries(recon_determinism_tests PRIVATE
+    fx_core
+    GTest::gtest_main
+)
+
+gtest_discover_tests(recon_determinism_tests
+  TEST_PREFIX determinism_
+  DISCOVERY_MODE PRE_TEST
+)
+
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
