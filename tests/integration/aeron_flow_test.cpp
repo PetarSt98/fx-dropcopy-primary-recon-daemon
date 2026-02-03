@@ -222,6 +222,160 @@ core::WireExecEvent make_wire_exec_custom(
     return evt;
 }
 
+// RAII wrapper for test environment setup and cleanup
+class AeronTestEnvironment {
+public:
+    // Configuration for test environment
+    struct Config {
+        std::string primary_channel;
+        std::string dropcopy_channel;
+        std::int32_t primary_stream;
+        std::int32_t dropcopy_stream;
+        std::uint64_t grace_period_ns{200'000'000};  // 200ms default
+        bool enable_gap_suppression{true};
+        bool enable_timer_wheel{true};
+    };
+
+    explicit AeronTestEnvironment(const Config& cfg)
+        : config_(cfg)
+        , aeron_dir_(make_unique_aeron_dir())
+        , media_driver_(launch_media_driver(aeron_dir_))
+        , primary_ring_(std::make_unique<ingest::Ring>())
+        , dropcopy_ring_(std::make_unique<ingest::Ring>())
+        , arena_(util::Arena::default_capacity_bytes)
+        , store_(arena_, 1u << 12)
+        , timer_wheel_(0)
+    {
+        setenv("AERON_DIR", aeron_dir_.string().c_str(), 1);
+        
+        if (!media_driver_.valid()) {
+            throw std::runtime_error("Failed to start Aeron media driver");
+        }
+
+        const auto cnc_path = aeron_dir_ / "cnc.dat";
+        if (!wait_for_file(cnc_path, std::chrono::seconds{5})) {
+            throw std::runtime_error("Aeron media driver did not create cnc.dat");
+        }
+
+        // Setup reconciler config
+        recon_config_ = core::default_recon_config();
+        recon_config_.grace_period_ns = config_.grace_period_ns;
+        recon_config_.enable_gap_suppression = config_.enable_gap_suppression;
+
+        // Setup Aeron context and client
+        aeron::Context context;
+        context.aeronDir(aeron_dir_.string());
+        client_ = aeron::Aeron::connect(context);
+
+        // Create reconciler
+        if (config_.enable_timer_wheel) {
+            reconciler_ = std::make_unique<core::Reconciler>(
+                stop_flag_, *primary_ring_, *dropcopy_ring_, store_, counters_,
+                divergence_ring_, seq_gap_ring_, &timer_wheel_, recon_config_);
+        } else {
+            reconciler_ = std::make_unique<core::Reconciler>(
+                stop_flag_, *primary_ring_, *dropcopy_ring_, store_, counters_,
+                divergence_ring_, seq_gap_ring_);
+        }
+
+        // Create subscribers
+        primary_sub_ = std::make_unique<ingest::AeronSubscriber>(
+            config_.primary_channel, config_.primary_stream,
+            *primary_ring_, primary_stats_, core::Source::Primary,
+            client_, stop_flag_);
+        
+        dropcopy_sub_ = std::make_unique<ingest::AeronSubscriber>(
+            config_.dropcopy_channel, config_.dropcopy_stream,
+            *dropcopy_ring_, dropcopy_stats_, core::Source::DropCopy,
+            client_, stop_flag_);
+
+        // Start threads
+        primary_thread_ = std::thread([this] { primary_sub_->run(); });
+        dropcopy_thread_ = std::thread([this] { dropcopy_sub_->run(); });
+        recon_thread_ = std::thread([this] { reconciler_->run(); });
+
+        if (config_.enable_timer_wheel) {
+            timer_thread_ = std::thread([this] {
+                while (!stop_flag_.load(std::memory_order_acquire)) {
+                    auto now = util::rdtsc();
+                    timer_wheel_.poll_expired(now, [this](core::OrderKey key, std::uint32_t gen) {
+                        reconciler_->on_grace_deadline_expired(key, gen);
+                    });
+                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                }
+            });
+        }
+
+        // Setup publisher client
+        aeron::Context pub_context;
+        pub_context.aeronDir(aeron_dir_.string());
+        pub_client_ = aeron::Aeron::connect(pub_context);
+    }
+
+    ~AeronTestEnvironment() {
+        cleanup();
+    }
+
+    // Delete copy/move to ensure RAII semantics
+    AeronTestEnvironment(const AeronTestEnvironment&) = delete;
+    AeronTestEnvironment& operator=(const AeronTestEnvironment&) = delete;
+    AeronTestEnvironment(AeronTestEnvironment&&) = delete;
+    AeronTestEnvironment& operator=(AeronTestEnvironment&&) = delete;
+
+    // Accessors
+    core::ReconCounters& counters() { return counters_; }
+    core::DivergenceRing& divergence_ring() { return divergence_ring_; }
+    core::SequenceGapRing& seq_gap_ring() { return seq_gap_ring_; }
+    std::shared_ptr<aeron::Aeron> pub_client() { return pub_client_; }
+    const std::string& primary_channel() const { return config_.primary_channel; }
+    const std::string& dropcopy_channel() const { return config_.dropcopy_channel; }
+    std::int32_t primary_stream() const { return config_.primary_stream; }
+    std::int32_t dropcopy_stream() const { return config_.dropcopy_stream; }
+
+private:
+    void cleanup() {
+        if (cleaned_) return;
+        stop_flag_.store(true, std::memory_order_release);
+        if (primary_thread_.joinable()) primary_thread_.join();
+        if (dropcopy_thread_.joinable()) dropcopy_thread_.join();
+        if (recon_thread_.joinable()) recon_thread_.join();
+        if (timer_thread_.joinable()) timer_thread_.join();
+        media_driver_.stop();
+        std::filesystem::remove_all(aeron_dir_);
+        cleaned_ = true;
+    }
+
+    Config config_;
+    std::filesystem::path aeron_dir_;
+    ProcessGuard media_driver_;
+    
+    std::unique_ptr<ingest::Ring> primary_ring_;
+    std::unique_ptr<ingest::Ring> dropcopy_ring_;
+    ingest::ThreadStats primary_stats_{};
+    ingest::ThreadStats dropcopy_stats_{};
+    core::ReconCounters counters_{};
+    core::DivergenceRing divergence_ring_;
+    core::SequenceGapRing seq_gap_ring_;
+    std::atomic<bool> stop_flag_{false};
+    util::Arena arena_;
+    core::OrderStateStore store_;
+    util::WheelTimer timer_wheel_;
+    core::ReconConfig recon_config_;
+
+    std::shared_ptr<aeron::Aeron> client_;
+    std::shared_ptr<aeron::Aeron> pub_client_;
+    std::unique_ptr<core::Reconciler> reconciler_;
+    std::unique_ptr<ingest::AeronSubscriber> primary_sub_;
+    std::unique_ptr<ingest::AeronSubscriber> dropcopy_sub_;
+
+    std::thread primary_thread_;
+    std::thread dropcopy_thread_;
+    std::thread recon_thread_;
+    std::thread timer_thread_;
+    
+    bool cleaned_{false};
+};
+
 } // namespace
 
 TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
@@ -323,101 +477,22 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
     // Scenario: Primary and dropcopy report identical fills
     // Expected: No divergence emitted, orders_matched counter incremented
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20123";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20124";
-    constexpr std::int32_t primary_stream = 1003;
-    constexpr std::int32_t dropcopy_stream = 1004;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20123",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20124",
+        .primary_stream = 1003,
+        .dropcopy_stream = 1004,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto primary_pub = make_publication(*pub_client, primary_channel, primary_stream, publish_deadline);
-    auto dropcopy_pub = make_publication(*pub_client, dropcopy_channel, dropcopy_stream, publish_deadline);
+    auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(), 
+                                       env.primary_stream(), publish_deadline);
+    auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(), 
+                                        env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
     // Publish matching fills: ORDER1, qty=100, price=1.2345
@@ -431,7 +506,7 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
     // Wait for processing
     const auto processing_deadline = Clock::now() + std::chrono::seconds{5};
     while (Clock::now() < processing_deadline) {
-        if (counters.orders_matched > 0) {
+        if (env.counters().orders_matched > 0) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds{20});
@@ -440,14 +515,12 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
     // Wait a bit longer to ensure no divergence is emitted
     std::this_thread::sleep_for(std::chrono::milliseconds{500});
 
-    cleanup();
-
     // Verify: no divergence emitted
     core::Divergence div;
-    EXPECT_FALSE(divergence_ring.try_pop(div)) << "Unexpected divergence for matching orders";
+    EXPECT_FALSE(env.divergence_ring().try_pop(div)) << "Unexpected divergence for matching orders";
 
     // Verify: orders_matched counter incremented
-    EXPECT_EQ(counters.orders_matched, 1) << "Expected orders_matched=1";
+    EXPECT_EQ(env.counters().orders_matched, 1) << "Expected orders_matched=1";
 }
 
 // ===== Test 1: Phantom Order Detection (DropCopy-only order) =====
@@ -455,100 +528,20 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
     // Scenario: DropCopy fill arrives, primary never sends matching event
     // Expected: After grace period expires, PhantomOrder divergence emitted
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20125";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20126";
-    constexpr std::int32_t primary_stream = 1005;
-    constexpr std::int32_t dropcopy_stream = 1006;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20125",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20126",
+        .primary_stream = 1005,
+        .dropcopy_stream = 1006,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto dropcopy_pub = make_publication(*pub_client, dropcopy_channel, dropcopy_stream, publish_deadline);
+    auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(), 
+                                        env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(dropcopy_pub) << "Failed to create dropcopy publication";
 
     // Publish fill event ONLY to dropcopy channel
@@ -557,14 +550,12 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
 
     // Wait for grace period + buffer time
     core::Divergence div;
-    bool found_divergence = wait_for_divergence(divergence_ring, div, std::chrono::milliseconds{800});
-
-    cleanup();
+    bool found_divergence = wait_for_divergence(env.divergence_ring(), div, std::chrono::milliseconds{800});
 
     // Verify: PhantomOrder divergence emitted
     ASSERT_TRUE(found_divergence) << "Expected PhantomOrder divergence";
     EXPECT_EQ(div.type, core::DivergenceType::PhantomOrder);
-    EXPECT_GT(counters.divergence_phantom, 0) << "Expected divergence_phantom counter > 0";
+    EXPECT_GT(env.counters().divergence_phantom, 0) << "Expected divergence_phantom counter > 0";
 }
 
 // ===== Test 2: Quantity Mismatch Detection =====
@@ -572,101 +563,22 @@ TEST(AeronFlowIntegrationTest, QuantityMismatchDetectedEndToEnd) {
     // Scenario: Primary and dropcopy both report same order, different quantities
     // Expected: QuantityMismatch divergence emitted
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20127";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20128";
-    constexpr std::int32_t primary_stream = 1007;
-    constexpr std::int32_t dropcopy_stream = 1008;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20127",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20128",
+        .primary_stream = 1007,
+        .dropcopy_stream = 1008,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto primary_pub = make_publication(*pub_client, primary_channel, primary_stream, publish_deadline);
-    auto dropcopy_pub = make_publication(*pub_client, dropcopy_channel, dropcopy_stream, publish_deadline);
+    auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(), 
+                                       env.primary_stream(), publish_deadline);
+    auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(), 
+                                        env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
     // Publish primary fill: ORDER1, qty=100
@@ -680,14 +592,12 @@ TEST(AeronFlowIntegrationTest, QuantityMismatchDetectedEndToEnd) {
 
     // Wait for divergence
     core::Divergence div;
-    bool found_divergence = wait_for_divergence(divergence_ring, div, std::chrono::milliseconds{800});
-
-    cleanup();
+    bool found_divergence = wait_for_divergence(env.divergence_ring(), div, std::chrono::milliseconds{800});
 
     // Verify: QuantityMismatch divergence emitted
     ASSERT_TRUE(found_divergence) << "Expected QuantityMismatch divergence";
     EXPECT_EQ(div.type, core::DivergenceType::QuantityMismatch);
-    EXPECT_GT(counters.divergence_quantity_mismatch, 0) << "Expected divergence_quantity_mismatch counter > 0";
+    EXPECT_GT(env.counters().divergence_quantity_mismatch, 0) << "Expected divergence_quantity_mismatch counter > 0";
 }
 
 // ===== Test 3: Price Mismatch Detection =====
@@ -695,101 +605,22 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
     // Scenario: Primary and dropcopy report same order, different prices
     // Expected: StateMismatch divergence emitted
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20129";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20130";
-    constexpr std::int32_t primary_stream = 1009;
-    constexpr std::int32_t dropcopy_stream = 1010;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20129",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20130",
+        .primary_stream = 1009,
+        .dropcopy_stream = 1010,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto primary_pub = make_publication(*pub_client, primary_channel, primary_stream, publish_deadline);
-    auto dropcopy_pub = make_publication(*pub_client, dropcopy_channel, dropcopy_stream, publish_deadline);
+    auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(),
+                                       env.primary_stream(), publish_deadline);
+    auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(),
+                                        env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
     // Publish primary fill: ORDER1, price=1.2345
@@ -803,14 +634,12 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
 
     // Wait for divergence
     core::Divergence div;
-    bool found_divergence = wait_for_divergence(divergence_ring, div, std::chrono::milliseconds{800});
-
-    cleanup();
+    bool found_divergence = wait_for_divergence(env.divergence_ring(), div, std::chrono::milliseconds{800});
 
     // Verify: StateMismatch divergence emitted (price mismatch classified as state mismatch)
     ASSERT_TRUE(found_divergence) << "Expected StateMismatch divergence";
     EXPECT_EQ(div.type, core::DivergenceType::StateMismatch);
-    EXPECT_GT(counters.divergence_state_mismatch, 0) << "Expected divergence_state_mismatch counter > 0";
+    EXPECT_GT(env.counters().divergence_state_mismatch, 0) << "Expected divergence_state_mismatch counter > 0";
 }
 
 // ===== Test 4: Sequence Gap Detection =====
@@ -818,100 +647,20 @@ TEST(AeronFlowIntegrationTest, SequenceGapDetectedEndToEnd) {
     // Scenario: Primary stream has sequence gap (seq 1, 2, skip 3-4, then 5)
     // Expected: Gap event emitted to seq_gap_ring
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20131";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20132";
-    constexpr std::int32_t primary_stream = 1011;
-    constexpr std::int32_t dropcopy_stream = 1012;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20131",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20132",
+        .primary_stream = 1011,
+        .dropcopy_stream = 1012,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto primary_pub = make_publication(*pub_client, primary_channel, primary_stream, publish_deadline);
+    auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(),
+                                       env.primary_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub) << "Failed to create primary publication";
 
     // Publish primary events: seq 1, seq 2
@@ -928,118 +677,38 @@ TEST(AeronFlowIntegrationTest, SequenceGapDetectedEndToEnd) {
 
     // Wait for gap event
     core::SequenceGapEvent gap;
-    bool found_gap = wait_for_gap_event(seq_gap_ring, gap, std::chrono::milliseconds{500});
-
-    cleanup();
+    bool found_gap = wait_for_gap_event(env.seq_gap_ring(), gap, std::chrono::milliseconds{500});
 
     // Verify: gap event emitted
     ASSERT_TRUE(found_gap) << "Expected sequence gap event";
     EXPECT_EQ(gap.source, core::Source::Primary);
     EXPECT_EQ(gap.expected_seq, 3) << "Expected gap at sequence 3";
     EXPECT_EQ(gap.seen_seq, 5) << "Expected gap detected when seq 5 arrived";
-    EXPECT_GT(counters.primary_seq_gaps, 0) << "Expected primary_seq_gaps counter > 0";
+    EXPECT_GT(env.counters().primary_seq_gaps, 0) << "Expected primary_seq_gaps counter > 0";
 }
+
 
 // ===== Test 5: Gap Suppression of Divergences =====
 TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
     // Scenario: Sequence gap present when divergence would normally confirm
     // Expected: Divergence is suppressed (not emitted)
 
-    const std::string primary_channel = "aeron:udp?endpoint=localhost:20133";
-    const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20134";
-    constexpr std::int32_t primary_stream = 1013;
-    constexpr std::int32_t dropcopy_stream = 1014;
-
-    const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
-
-    ProcessGuard media_driver(launch_media_driver(aeron_dir));
-    ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
-
-    const auto cnc_path = aeron_dir / "cnc.dat";
-    ASSERT_TRUE(wait_for_file(cnc_path, std::chrono::seconds{5}))
-        << "Aeron media driver did not create " << cnc_path;
-
-    // Setup rings and infrastructure
-    auto primary_ring = std::make_unique<ingest::Ring>();
-    auto dropcopy_ring = std::make_unique<ingest::Ring>();
-    ingest::ThreadStats primary_stats;
-    ingest::ThreadStats dropcopy_stats;
-    core::ReconCounters counters{};
-    core::DivergenceRing divergence_ring;
-    core::SequenceGapRing seq_gap_ring;
-    std::atomic<bool> stop_flag{false};
-    util::Arena arena(util::Arena::default_capacity_bytes);
-    constexpr std::size_t order_capacity_hint = 1u << 12;
-    core::OrderStateStore store(arena, order_capacity_hint);
-
-    // Setup timer wheel and config
-    util::WheelTimer timer_wheel(0);
-    core::ReconConfig config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;  // 200ms for faster tests
-    config.enable_gap_suppression = true;  // Enable gap suppression
-
-    aeron::Context context;
-    context.aeronDir(aeron_dir.string());
-    auto client = aeron::Aeron::connect(context);
-
-    // Create reconciler with timer wheel
-    core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters,
-                          divergence_ring, seq_gap_ring, &timer_wheel, config);
-
-    ingest::AeronSubscriber primary_sub(primary_channel,
-                                        primary_stream,
-                                        *primary_ring,
-                                        primary_stats,
-                                        core::Source::Primary,
-                                        client,
-                                        stop_flag);
-    ingest::AeronSubscriber dropcopy_sub(dropcopy_channel,
-                                         dropcopy_stream,
-                                         *dropcopy_ring,
-                                         dropcopy_stats,
-                                         core::Source::DropCopy,
-                                         client,
-                                         stop_flag);
-
-    std::thread primary_thread([&] { primary_sub.run(); });
-    std::thread dropcopy_thread([&] { dropcopy_sub.run(); });
-    std::thread recon_thread([&] { recon.run(); });
-
-    // Timer polling thread
-    std::thread timer_thread([&] {
-        while (!stop_flag.load(std::memory_order_acquire)) {
-            auto now = util::rdtsc();
-            timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-                recon.on_grace_deadline_expired(key, gen);
-            });
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-    });
-
-    bool cleaned = false;
-    auto cleanup = [&] {
-        if (cleaned) return;
-        stop_flag.store(true, std::memory_order_release);
-        if (primary_thread.joinable()) primary_thread.join();
-        if (dropcopy_thread.joinable()) dropcopy_thread.join();
-        if (recon_thread.joinable()) recon_thread.join();
-        if (timer_thread.joinable()) timer_thread.join();
-        media_driver.stop();
-        std::filesystem::remove_all(aeron_dir);
-        cleaned = true;
+    AeronTestEnvironment::Config config{
+        .primary_channel = "aeron:udp?endpoint=localhost:20133",
+        .dropcopy_channel = "aeron:udp?endpoint=localhost:20134",
+        .primary_stream = 1013,
+        .dropcopy_stream = 1014,
+        .grace_period_ns = 200'000'000,
+        .enable_gap_suppression = true,
+        .enable_timer_wheel = true
     };
-    const auto guard = std::unique_ptr<void, std::function<void(void*)>>(
-        nullptr, [&](void*) { cleanup(); });
-
-    // Setup publisher
-    aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
-    auto pub_client = aeron::Aeron::connect(pub_context);
+    AeronTestEnvironment env(config);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
-    auto primary_pub = make_publication(*pub_client, primary_channel, primary_stream, publish_deadline);
-    auto dropcopy_pub = make_publication(*pub_client, dropcopy_channel, dropcopy_stream, publish_deadline);
+    auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(),
+                                       env.primary_stream(), publish_deadline);
+    auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(),
+                                        env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
     // Create sequence gap on primary stream (seq 1, then seq 5)
@@ -1058,15 +727,13 @@ TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
     // Wait for grace period + buffer
     std::this_thread::sleep_for(std::chrono::milliseconds{600});
 
-    cleanup();
-
     // Verify: divergence_ring is EMPTY (suppressed due to gap)
     core::Divergence div;
-    bool found_divergence = divergence_ring.try_pop(div);
+    bool found_divergence = env.divergence_ring().try_pop(div);
     EXPECT_FALSE(found_divergence) << "Divergence should be suppressed due to gap";
 
     // Verify: gap_suppressions counter incremented
-    EXPECT_GT(counters.gap_suppressions, 0) << "Expected gap_suppressions counter > 0";
+    EXPECT_GT(env.counters().gap_suppressions, 0) << "Expected gap_suppressions counter > 0";
 }
 
 

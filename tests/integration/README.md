@@ -144,10 +144,10 @@ All tests properly clean up resources:
 
 ```bash
 # Run all integration tests
-docker compose run --rm --profile test integration-tests
+docker compose run --rm integration-tests
 
 # Run specific test
-docker compose run --rm --profile test integration-tests -- --gtest_filter="*PhantomOrder*"
+docker compose run --rm integration-tests -- --gtest_filter="*PhantomOrder*"
 ```
 
 ### Via CMake/CTest
