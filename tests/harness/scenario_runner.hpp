@@ -14,7 +14,7 @@
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
 #include "util/wheel_timer.hpp"
-#include "tests/harness/scenario_builder.hpp"
+#include "harness/scenario_builder.hpp"
 
 namespace test {
 
