@@ -2,8 +2,8 @@
 
 #include "core/recon_config.hpp"
 #include "core/divergence.hpp"
-#include "tests/harness/scenario_builder.hpp"
-#include "tests/harness/scenario_runner.hpp"
+#include "harness/scenario_builder.hpp"
+#include "harness/scenario_runner.hpp"
 
 using namespace test;
 
