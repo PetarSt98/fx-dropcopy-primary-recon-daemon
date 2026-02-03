@@ -815,7 +815,7 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
 
 // ===== Test 4: Sequence Gap Detection =====
 TEST(AeronFlowIntegrationTest, SequenceGapDetectedEndToEnd) {
-    // Scenario: Primary stream has sequence gap (seq 1, 2, skip 3, then 5)
+    // Scenario: Primary stream has sequence gap (seq 1, 2, skip 3-4, then 5)
     // Expected: Gap event emitted to seq_gap_ring
 
     const std::string primary_channel = "aeron:udp?endpoint=localhost:20131";
