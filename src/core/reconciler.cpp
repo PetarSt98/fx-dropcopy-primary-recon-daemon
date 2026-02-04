@@ -441,6 +441,10 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
         return;  // Don't record emission if push failed - prevents dedup suppressing future attempts
     }
 
+    // Increment divergence counters after successful emission
+    ++counters_.divergence_total;
+    increment_divergence_counter(div.type);
+
     // Record emission for deduplication (only after successful push)
     record_divergence_emission(os, mismatch, now_tsc);
     
