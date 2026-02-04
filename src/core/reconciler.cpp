@@ -293,7 +293,10 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
     // Inline gap timeout check (from master branch's FX-7054 Part 1):
     // Close gaps that have exceeded gap_close_timeout_ns during reconciliation checks.
     // This provides faster gap closure than the periodic check_gap_timeouts() in run().
-    const std::uint64_t now = last_poll_tsc_;
+    // IMPORTANT: Use util::rdtsc() here, not last_poll_tsc_, because last_poll_tsc_ is only
+    // updated when events arrive. If no events arrive after a gap, last_poll_tsc_ stays stale
+    // and the timeout never triggers, causing infinite gap suppression loops.
+    const std::uint64_t now = util::rdtsc();
     const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
 
     if (primary_seq_tracker_.gap_open) {
