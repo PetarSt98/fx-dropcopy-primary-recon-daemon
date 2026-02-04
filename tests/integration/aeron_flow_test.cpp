@@ -366,17 +366,9 @@ public:
         dropcopy_thread_ = std::thread([this] { dropcopy_sub_->run(); });
         recon_thread_ = std::thread([this] { reconciler_->run(); });
 
-        if (config_.enable_timer_wheel) {
-            timer_thread_ = std::thread([this] {
-                while (!stop_flag_.load(std::memory_order_acquire)) {
-                    auto now = util::rdtsc();
-                    timer_wheel_.poll_expired(now, [this](core::OrderKey key, std::uint32_t gen) {
-                        reconciler_->on_grace_deadline_expired(key, gen);
-                    });
-                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
-                }
-            });
-        }
+        // Note: Do NOT create a separate timer thread!
+        // The reconciler's run() loop already polls the timer wheel internally.
+        // Creating a separate timer thread would cause race conditions and double-polling.
 
         // Setup publisher client
         aeron::Context pub_context;
@@ -415,7 +407,7 @@ private:
         if (primary_thread_.joinable()) primary_thread_.join();
         if (dropcopy_thread_.joinable()) dropcopy_thread_.join();
         if (recon_thread_.joinable()) recon_thread_.join();
-        if (timer_thread_.joinable()) timer_thread_.join();
+        // No timer_thread to join - reconciler polls timer internally
         media_driver_.stop();
         std::filesystem::remove_all(aeron_dir_);
         cleaned_ = true;
@@ -447,7 +439,7 @@ private:
     std::thread primary_thread_;
     std::thread dropcopy_thread_;
     std::thread recon_thread_;
-    std::thread timer_thread_;
+    // No timer_thread_ - reconciler polls timer internally
     
     bool cleaned_{false};
 };
