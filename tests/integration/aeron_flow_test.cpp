@@ -222,7 +222,15 @@ core::WireExecEvent make_wire_exec_custom(
     return evt;
 }
 
-// Wait for publication to be connected and ready
+/// Wait for Aeron publication to be connected and ready to accept messages.
+/// 
+/// Aeron publications must establish a connection with subscribers before they can
+/// successfully publish messages. This function polls the connection status at 10ms
+/// intervals, which balances responsiveness with CPU usage.
+///
+/// @param pub The Aeron publication to check
+/// @param deadline Maximum time to wait for connection
+/// @return true if publication becomes connected before deadline, false otherwise
 bool wait_for_publication_ready(aeron::Publication& pub, Clock::time_point deadline) {
     while (Clock::now() < deadline) {
         if (pub.isConnected()) {
@@ -233,7 +241,17 @@ bool wait_for_publication_ready(aeron::Publication& pub, Clock::time_point deadl
     return false;
 }
 
-// Publish with retry until connected
+/// Publish a wire event with retry logic until successful or timeout.
+///
+/// Wraps the publish() call with retry logic to handle cases where the publication
+/// is connected but not yet ready to accept messages (e.g., buffer full, flow control).
+/// Uses a 1ms sleep between retries to reduce CPU consumption while maintaining
+/// responsiveness. This matches the pattern used in publish_fragments().
+///
+/// @param pub The Aeron publication to use
+/// @param evt The wire event to publish
+/// @param deadline Maximum time to keep retrying
+/// @return true if message was successfully published, false if timeout reached
 bool publish_with_retry(aeron::Publication& pub, const core::WireExecEvent& evt, Clock::time_point deadline) {
     while (Clock::now() < deadline) {
         if (publish(pub, evt)) {
@@ -243,6 +261,7 @@ bool publish_with_retry(aeron::Publication& pub, const core::WireExecEvent& evt,
     }
     return false;
 }
+
 
 // RAII wrapper for test environment setup and cleanup
 class AeronTestEnvironment {
