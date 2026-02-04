@@ -351,6 +351,10 @@ public:
         aeron::Context pub_context;
         pub_context.aeronDir(aeron_dir_.string());
         pub_client_ = aeron::Aeron::connect(pub_context);
+        
+        // Give subscribers time to connect and start polling
+        // This ensures the Aeron subscribers discover publishers when we create publications
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
     }
 
     ~AeronTestEnvironment() {
@@ -552,6 +556,17 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
     ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
         << "Failed to publish dropcopy fill";
 
+    // Wait for messages to be consumed
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
+    while (Clock::now() < consumption_deadline) {
+        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
+    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+
     // Wait for processing
     const auto processing_deadline = Clock::now() + std::chrono::seconds{5};
     while (Clock::now() < processing_deadline) {
@@ -601,6 +616,16 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
     auto dropcopy_fill = make_wire_exec_custom(1, "PHANTOM1", 100, 1234500);
     ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
         << "Failed to publish dropcopy fill";
+
+    // Wait for message to be consumed
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
+    while (Clock::now() < consumption_deadline) {
+        if (env.counters().dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
 
     // Wait for grace period + buffer time
     core::Divergence div;
@@ -652,6 +677,17 @@ TEST(AeronFlowIntegrationTest, QuantityMismatchDetectedEndToEnd) {
     ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
         << "Failed to publish dropcopy fill";
 
+    // Wait for messages to be consumed
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
+    while (Clock::now() < consumption_deadline) {
+        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
+    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+
     // Wait for divergence
     core::Divergence div;
     bool found_divergence = wait_for_divergence(env.divergence_ring(), div, std::chrono::milliseconds{800});
@@ -701,6 +737,17 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
     auto dropcopy_fill = make_wire_exec_custom(1, "ORDER1", 100, 1500000);
     ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
         << "Failed to publish dropcopy fill";
+
+    // Wait for messages to be consumed
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
+    while (Clock::now() < consumption_deadline) {
+        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
+    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
 
     // Wait for divergence
     core::Divergence div;
@@ -809,6 +856,17 @@ TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
     auto dropcopy_fill = make_wire_exec_custom(1, "PHANTOM_GAP", 100, 1234500);
     ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
         << "Failed to publish dropcopy fill";
+
+    // Wait for messages to be consumed
+    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
+    while (Clock::now() < consumption_deadline) {
+        if (env.counters().internal_events >= 2 && env.counters().dropcopy_events > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    ASSERT_GE(env.counters().internal_events, 2) << "Primary messages not consumed";
+    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
 
     // Wait for grace period + buffer
     std::this_thread::sleep_for(std::chrono::milliseconds{600});
