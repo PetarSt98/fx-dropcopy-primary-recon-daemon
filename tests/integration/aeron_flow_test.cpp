@@ -382,7 +382,7 @@ public:
         aeron::Context pub_context;
         pub_context.aeronDir(aeron_dir_.string());
         pub_client_ = aeron::Aeron::connect(pub_context);
-        
+
         // Give subscribers time to connect and start polling
         // This ensures the Aeron subscribers discover publishers when we create publications
         std::this_thread::sleep_for(SUBSCRIBER_CONNECTION_DELAY_MS);
