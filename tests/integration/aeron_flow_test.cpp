@@ -222,6 +222,28 @@ core::WireExecEvent make_wire_exec_custom(
     return evt;
 }
 
+// Wait for publication to be connected and ready
+bool wait_for_publication_ready(aeron::Publication& pub, Clock::time_point deadline) {
+    while (Clock::now() < deadline) {
+        if (pub.isConnected()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return false;
+}
+
+// Publish with retry until connected
+bool publish_with_retry(aeron::Publication& pub, const core::WireExecEvent& evt, Clock::time_point deadline) {
+    while (Clock::now() < deadline) {
+        if (publish(pub, evt)) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return false;
+}
+
 // RAII wrapper for test environment setup and cleanup
 class AeronTestEnvironment {
 public:
@@ -495,13 +517,21 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
                                         env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
+    // Wait for publications to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
+        << "Primary publication not ready";
+    ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
+        << "Dropcopy publication not ready";
+
     // Publish matching fills: ORDER1, qty=100, price=1.2345
     auto primary_fill = make_wire_exec_custom(1, "ORDER1", 100, 1234500);
     auto dropcopy_fill = make_wire_exec_custom(1, "ORDER1", 100, 1234500);
 
-    ASSERT_TRUE(publish(*primary_pub, primary_fill)) << "Failed to publish primary fill";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, primary_fill, publish_deadline)) 
+        << "Failed to publish primary fill";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    ASSERT_TRUE(publish(*dropcopy_pub, dropcopy_fill)) << "Failed to publish dropcopy fill";
+    ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
+        << "Failed to publish dropcopy fill";
 
     // Wait for processing
     const auto processing_deadline = Clock::now() + std::chrono::seconds{5};
@@ -544,9 +574,14 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
                                         env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(dropcopy_pub) << "Failed to create dropcopy publication";
 
+    // Wait for publication to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
+        << "Dropcopy publication not ready";
+
     // Publish fill event ONLY to dropcopy channel
     auto dropcopy_fill = make_wire_exec_custom(1, "PHANTOM1", 100, 1234500);
-    ASSERT_TRUE(publish(*dropcopy_pub, dropcopy_fill)) << "Failed to publish dropcopy fill";
+    ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
+        << "Failed to publish dropcopy fill";
 
     // Wait for grace period + buffer time
     core::Divergence div;
@@ -581,14 +616,22 @@ TEST(AeronFlowIntegrationTest, QuantityMismatchDetectedEndToEnd) {
                                         env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
+    // Wait for publications to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
+        << "Primary publication not ready";
+    ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
+        << "Dropcopy publication not ready";
+
     // Publish primary fill: ORDER1, qty=100
     auto primary_fill = make_wire_exec_custom(1, "ORDER1", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, primary_fill)) << "Failed to publish primary fill";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, primary_fill, publish_deadline)) 
+        << "Failed to publish primary fill";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
 
     // Publish dropcopy fill: ORDER1, qty=150 (MISMATCH)
     auto dropcopy_fill = make_wire_exec_custom(1, "ORDER1", 150, 1234500);
-    ASSERT_TRUE(publish(*dropcopy_pub, dropcopy_fill)) << "Failed to publish dropcopy fill";
+    ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
+        << "Failed to publish dropcopy fill";
 
     // Wait for divergence
     core::Divergence div;
@@ -623,14 +666,22 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
                                         env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
+    // Wait for publications to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
+        << "Primary publication not ready";
+    ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
+        << "Dropcopy publication not ready";
+
     // Publish primary fill: ORDER1, price=1.2345
     auto primary_fill = make_wire_exec_custom(1, "ORDER1", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, primary_fill)) << "Failed to publish primary fill";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, primary_fill, publish_deadline)) 
+        << "Failed to publish primary fill";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
 
     // Publish dropcopy fill: ORDER1, price=1.5000 (MISMATCH)
     auto dropcopy_fill = make_wire_exec_custom(1, "ORDER1", 100, 1500000);
-    ASSERT_TRUE(publish(*dropcopy_pub, dropcopy_fill)) << "Failed to publish dropcopy fill";
+    ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
+        << "Failed to publish dropcopy fill";
 
     // Wait for divergence
     core::Divergence div;
@@ -663,17 +714,24 @@ TEST(AeronFlowIntegrationTest, SequenceGapDetectedEndToEnd) {
                                        env.primary_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub) << "Failed to create primary publication";
 
+    // Wait for publication to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
+        << "Primary publication not ready";
+
     // Publish primary events: seq 1, seq 2
     auto evt1 = make_wire_exec_custom(1, "ORDER1", 100, 1234500);
     auto evt2 = make_wire_exec_custom(2, "ORDER2", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, evt1)) << "Failed to publish seq 1";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, evt1, publish_deadline)) 
+        << "Failed to publish seq 1";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    ASSERT_TRUE(publish(*primary_pub, evt2)) << "Failed to publish seq 2";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, evt2, publish_deadline)) 
+        << "Failed to publish seq 2";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
 
     // Publish primary event: seq 5 (gap detected: 3-4 missing)
     auto evt5 = make_wire_exec_custom(5, "ORDER5", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, evt5)) << "Failed to publish seq 5";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, evt5, publish_deadline)) 
+        << "Failed to publish seq 5";
 
     // Wait for gap event
     core::SequenceGapEvent gap;
@@ -711,18 +769,27 @@ TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
                                         env.dropcopy_stream(), publish_deadline);
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
+    // Wait for publications to be ready
+    ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
+        << "Primary publication not ready";
+    ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
+        << "Dropcopy publication not ready";
+
     // Create sequence gap on primary stream (seq 1, then seq 5)
     auto primary_evt1 = make_wire_exec_custom(1, "GAP_ORDER1", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, primary_evt1)) << "Failed to publish primary seq 1";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, primary_evt1, publish_deadline)) 
+        << "Failed to publish primary seq 1";
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
 
     auto primary_evt5 = make_wire_exec_custom(5, "GAP_ORDER5", 100, 1234500);
-    ASSERT_TRUE(publish(*primary_pub, primary_evt5)) << "Failed to publish primary seq 5 (gap)";
+    ASSERT_TRUE(publish_with_retry(*primary_pub, primary_evt5, publish_deadline)) 
+        << "Failed to publish primary seq 5 (gap)";
     std::this_thread::sleep_for(std::chrono::milliseconds{50});
 
     // Publish dropcopy-only fill (would normally become PhantomOrder)
     auto dropcopy_fill = make_wire_exec_custom(1, "PHANTOM_GAP", 100, 1234500);
-    ASSERT_TRUE(publish(*dropcopy_pub, dropcopy_fill)) << "Failed to publish dropcopy fill";
+    ASSERT_TRUE(publish_with_retry(*dropcopy_pub, dropcopy_fill, publish_deadline)) 
+        << "Failed to publish dropcopy fill";
 
     // Wait for grace period + buffer
     std::this_thread::sleep_for(std::chrono::milliseconds{600});
