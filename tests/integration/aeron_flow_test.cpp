@@ -638,9 +638,28 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
     ASSERT_TRUE(wait_for_message_consumption(env.counters(), 0, 1, std::chrono::seconds{2}))
         << "Dropcopy message not consumed: dropcopy=" << env.counters().dropcopy_events;
 
+    // DEBUG: Print counters after consumption
+    std::cerr << "\n=== DEBUG: Counters after consumption ===\n";
+    std::cerr << "  internal_events=" << env.counters().internal_events << "\n";
+    std::cerr << "  dropcopy_events=" << env.counters().dropcopy_events << "\n";
+    std::cerr << "  mismatch_observed=" << env.counters().mismatch_observed << "\n";
+    std::cerr << "  mismatch_confirmed=" << env.counters().mismatch_confirmed << "\n";
+    std::cerr << "  orders_matched=" << env.counters().orders_matched << "\n";
+    std::cerr << "  false_positive_avoided=" << env.counters().false_positive_avoided << "\n";
+    std::cerr << "  gap_suppressions=" << env.counters().gap_suppressions << "\n";
+    std::cerr << "  timer_overflow=" << env.counters().timer_overflow << "\n";
+    std::cerr << "  stale_timers_skipped=" << env.counters().stale_timers_skipped << "\n";
+
     // Wait for grace period + buffer time
     core::Divergence div;
     bool found_divergence = wait_for_divergence(env.divergence_ring(), div, std::chrono::milliseconds{800});
+
+    // DEBUG: Print counters after wait
+    std::cerr << "\n=== DEBUG: Counters after wait ===\n";
+    std::cerr << "  divergence_total=" << env.counters().divergence_total << "\n";
+    std::cerr << "  divergence_phantom=" << env.counters().divergence_phantom << "\n";
+    std::cerr << "  mismatch_confirmed=" << env.counters().mismatch_confirmed << "\n";
+    std::cerr << "  found_divergence=" << found_divergence << "\n";
 
     // Verify: PhantomOrder divergence emitted
     ASSERT_TRUE(found_divergence) << "Expected PhantomOrder divergence";
