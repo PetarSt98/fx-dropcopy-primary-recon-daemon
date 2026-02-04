@@ -293,7 +293,9 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
     // Inline gap timeout check (from master branch's FX-7054 Part 1):
     // Close gaps that have exceeded gap_close_timeout_ns during reconciliation checks.
     // This provides faster gap closure than the periodic check_gap_timeouts() in run().
-    const std::uint64_t now = last_poll_tsc_;
+    // IMPORTANT: Use util::rdtsc() to get current time. last_poll_tsc_ is only updated
+    // on events and would stay stale if no events arrive, causing infinite gap suppression.
+    const std::uint64_t now = util::rdtsc();
     const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
 
     if (primary_seq_tracker_.gap_open) {
@@ -440,6 +442,10 @@ void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch
         ++counters_.divergence_ring_drops;
         return;  // Don't record emission if push failed - prevents dedup suppressing future attempts
     }
+
+    // Increment divergence counters after successful emission
+    ++counters_.divergence_total;
+    increment_divergence_counter(div.type);
 
     // Record emission for deduplication (only after successful push)
     record_divergence_emission(os, mismatch, now_tsc);
