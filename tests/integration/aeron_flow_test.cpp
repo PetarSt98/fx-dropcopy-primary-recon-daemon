@@ -257,7 +257,7 @@ bool publish_with_retry(aeron::Publication& pub, const core::WireExecEvent& evt,
         if (publish(pub, evt)) {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1}); // Small sleep to reduce CPU usage
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
     return false;
 }
