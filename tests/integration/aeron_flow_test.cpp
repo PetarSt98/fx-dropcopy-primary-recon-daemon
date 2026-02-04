@@ -262,6 +262,37 @@ bool publish_with_retry(aeron::Publication& pub, const core::WireExecEvent& evt,
     return false;
 }
 
+/// Wait for messages to be consumed by subscribers before checking for divergences.
+///
+/// This ensures messages have flowed through the pipeline: Publish → Aeron → Subscribe → Consume.
+/// Tests should call this before waiting for reconciliation/divergence detection.
+///
+/// @param counters The reconciler counters to check
+/// @param expected_internal Expected number of internal/primary events consumed (0 to skip check)
+/// @param expected_dropcopy Expected number of dropcopy events consumed (0 to skip check)
+/// @param timeout Maximum time to wait for consumption
+/// @return true if consumption requirements met, false on timeout
+bool wait_for_message_consumption(const core::ReconCounters& counters,
+                                  std::uint64_t expected_internal,
+                                  std::uint64_t expected_dropcopy,
+                                  std::chrono::milliseconds timeout) {
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+        bool internal_ok = (expected_internal == 0) || (counters.internal_events >= expected_internal);
+        bool dropcopy_ok = (expected_dropcopy == 0) || (counters.dropcopy_events >= expected_dropcopy);
+        if (internal_ok && dropcopy_ok) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return false;
+}
+
+// Delay to allow Aeron subscribers to connect to publishers.
+// This is necessary because Aeron discovery takes time - subscribers and publishers
+// need to exchange UDP discovery messages before data can flow.
+constexpr auto SUBSCRIBER_CONNECTION_DELAY_MS = std::chrono::milliseconds{100};
+
 
 // RAII wrapper for test environment setup and cleanup
 class AeronTestEnvironment {
@@ -354,7 +385,7 @@ public:
         
         // Give subscribers time to connect and start polling
         // This ensures the Aeron subscribers discover publishers when we create publications
-        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        std::this_thread::sleep_for(SUBSCRIBER_CONNECTION_DELAY_MS);
     }
 
     ~AeronTestEnvironment() {
@@ -557,15 +588,9 @@ TEST(AeronFlowIntegrationTest, MatchingOrdersProduceNoDivergence) {
         << "Failed to publish dropcopy fill";
 
     // Wait for messages to be consumed
-    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
-    while (Clock::now() < consumption_deadline) {
-        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
-    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+    ASSERT_TRUE(wait_for_message_consumption(env.counters(), 1, 1, std::chrono::seconds{2}))
+        << "Messages not consumed: internal=" << env.counters().internal_events 
+        << " dropcopy=" << env.counters().dropcopy_events;
 
     // Wait for processing
     const auto processing_deadline = Clock::now() + std::chrono::seconds{5};
@@ -618,14 +643,8 @@ TEST(AeronFlowIntegrationTest, PhantomOrderDetectedEndToEnd) {
         << "Failed to publish dropcopy fill";
 
     // Wait for message to be consumed
-    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
-    while (Clock::now() < consumption_deadline) {
-        if (env.counters().dropcopy_events > 0) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+    ASSERT_TRUE(wait_for_message_consumption(env.counters(), 0, 1, std::chrono::seconds{2}))
+        << "Dropcopy message not consumed: dropcopy=" << env.counters().dropcopy_events;
 
     // Wait for grace period + buffer time
     core::Divergence div;
@@ -678,15 +697,9 @@ TEST(AeronFlowIntegrationTest, QuantityMismatchDetectedEndToEnd) {
         << "Failed to publish dropcopy fill";
 
     // Wait for messages to be consumed
-    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
-    while (Clock::now() < consumption_deadline) {
-        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
-    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+    ASSERT_TRUE(wait_for_message_consumption(env.counters(), 1, 1, std::chrono::seconds{2}))
+        << "Messages not consumed: internal=" << env.counters().internal_events 
+        << " dropcopy=" << env.counters().dropcopy_events;
 
     // Wait for divergence
     core::Divergence div;
@@ -739,15 +752,9 @@ TEST(AeronFlowIntegrationTest, PriceMismatchDetectedEndToEnd) {
         << "Failed to publish dropcopy fill";
 
     // Wait for messages to be consumed
-    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
-    while (Clock::now() < consumption_deadline) {
-        if (env.counters().internal_events > 0 && env.counters().dropcopy_events > 0) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    ASSERT_GT(env.counters().internal_events, 0) << "Primary message not consumed";
-    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+    ASSERT_TRUE(wait_for_message_consumption(env.counters(), 1, 1, std::chrono::seconds{2}))
+        << "Messages not consumed: internal=" << env.counters().internal_events 
+        << " dropcopy=" << env.counters().dropcopy_events;
 
     // Wait for divergence
     core::Divergence div;
@@ -858,15 +865,9 @@ TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
         << "Failed to publish dropcopy fill";
 
     // Wait for messages to be consumed
-    const auto consumption_deadline = Clock::now() + std::chrono::seconds{2};
-    while (Clock::now() < consumption_deadline) {
-        if (env.counters().internal_events >= 2 && env.counters().dropcopy_events > 0) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    ASSERT_GE(env.counters().internal_events, 2) << "Primary messages not consumed";
-    ASSERT_GT(env.counters().dropcopy_events, 0) << "Dropcopy message not consumed";
+    ASSERT_TRUE(wait_for_message_consumption(env.counters(), 2, 1, std::chrono::seconds{2}))
+        << "Messages not consumed: internal=" << env.counters().internal_events 
+        << " dropcopy=" << env.counters().dropcopy_events;
 
     // Wait for grace period + buffer
     std::this_thread::sleep_for(std::chrono::milliseconds{600});
