@@ -37,30 +37,23 @@ Performance and Timing
 The daemon uses **RDTSC/RDTSCP** (CPU Time-Stamp Counter) by default for high-performance, low-overhead timestamps in the async logger. The implementation automatically:
 
 * Uses **RDTSCP** instruction on modern CPUs (more reliable in virtualized environments)
-* Falls back to **RDTSC** on older CPUs  
+* Falls back to **RDTSC** on older CPUs (pre-2008)
 * Uses **clock_gettime(CLOCK_MONOTONIC)** on non-x86 architectures
 
 ### Docker on Windows
 
-RDTSC typically works in Docker containers on Windows/WSL2. If you encounter issues (rare), configure Docker to expose TSC:
+RDTSCP typically works in Docker containers on modern Windows/WSL2 setups. The instruction is VM-friendly and supported by most hypervisors since ~2010.
 
-```bash
-# Windows/WSL2: Ensure TSC is available
-docker run --cap-add=SYS_TIME your-container
+**If you encounter TSC-related crashes** (rare on modern systems):
+1. Update Docker Desktop and WSL2 to the latest versions
+2. Ensure Windows version supports nested virtualization properly
+3. As a last resort, disable RDTSC in code:
+   ```cpp
+   // In main files:
+   hot_cfg.use_rdtsc = false;  // Falls back to clock_gettime
+   ```
 
-# Or in docker-compose.yml:
-services:
-  recon-daemon:
-    cap_add:
-      - SYS_TIME
-```
-
-For development/debugging without performance requirements, you can disable RDTSC:
-
-```cpp
-// In main code:
-hot_cfg.use_rdtsc = false;  // Falls back to clock_gettime
-```
+Note: RDTSC availability is controlled by the hypervisor/kernel, not Docker capabilities. Modern systems expose it by default.
 
 ### Environment Variables
 
