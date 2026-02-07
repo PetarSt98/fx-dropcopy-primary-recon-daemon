@@ -1,7 +1,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -64,10 +63,7 @@ int main() {
     // shutdown sets stop_flag then joins in deterministic order (ingest before reconciler).
     util::AsyncLogger::Config hot_cfg{};
     hot_cfg.capacity_pow2 = 1u << 14;
-    // RDTSC can fail in virtualized environments (Docker on Windows, etc.)
-    // Enable only if explicitly requested via environment variable
-    const char* use_rdtsc_env = std::getenv("USE_RDTSC");
-    hot_cfg.use_rdtsc = (use_rdtsc_env && std::strcmp(use_rdtsc_env, "1") == 0);
+    hot_cfg.use_rdtsc = true;
     if (!init_hot_logger(hot_cfg)) {
         LOG_SLOW_ERROR("Failed to start async logger for demo");
     }

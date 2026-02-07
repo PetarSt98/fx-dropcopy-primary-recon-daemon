@@ -31,18 +31,40 @@ docker compose run --rm --profile test integration-tests
 docker compose run --rm --profile dev dev-shell
 ```
 
-Environment Variables
----------------------
+Performance and Timing
+----------------------
+
+The daemon uses **RDTSC/RDTSCP** (CPU Time-Stamp Counter) by default for high-performance, low-overhead timestamps in the async logger. The implementation automatically:
+
+* Uses **RDTSCP** instruction on modern CPUs (more reliable in virtualized environments)
+* Falls back to **RDTSC** on older CPUs  
+* Uses **clock_gettime(CLOCK_MONOTONIC)** on non-x86 architectures
+
+### Docker on Windows
+
+RDTSC typically works in Docker containers on Windows/WSL2. If you encounter issues (rare), configure Docker to expose TSC:
+
+```bash
+# Windows/WSL2: Ensure TSC is available
+docker run --cap-add=SYS_TIME your-container
+
+# Or in docker-compose.yml:
+services:
+  recon-daemon:
+    cap_add:
+      - SYS_TIME
+```
+
+For development/debugging without performance requirements, you can disable RDTSC:
+
+```cpp
+// In main code:
+hot_cfg.use_rdtsc = false;  // Falls back to clock_gettime
+```
+
+### Environment Variables
 
 The daemon supports the following optional environment variables:
-
-* `USE_RDTSC`: Set to `1` to enable RDTSC (Read Time-Stamp Counter) for high-precision timestamps in the async logger. By default, RDTSC is **disabled** for better compatibility with virtualized environments (Docker on Windows, WSL2, etc.). Only enable this on bare-metal or properly configured hypervisors that expose RDTSC to containers.
-  
-  Example:
-  ```bash
-  # Enable RDTSC for performance-critical bare-metal deployments
-  docker compose run -e USE_RDTSC=1 recon-daemon
-  ```
 
 * `RECOND_RUN_MS`: Duration in milliseconds for the reconciliation daemon to run before automatic shutdown. If not set, the daemon runs until manually stopped (stdin or SIGTERM).
 
