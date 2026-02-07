@@ -24,7 +24,10 @@ int main(int argc, char** argv) {
 
     util::AsyncLogger::Config hot_cfg{};
     hot_cfg.capacity_pow2 = 1u << 15;
-    hot_cfg.use_rdtsc = true;
+    // RDTSC can fail in virtualized environments (Docker on Windows, etc.)
+    // Enable only if explicitly requested via environment variable
+    const char* use_rdtsc_env = std::getenv("USE_RDTSC");
+    hot_cfg.use_rdtsc = (use_rdtsc_env && std::string(use_rdtsc_env) == "1");
     if (!init_hot_logger(hot_cfg)) {
         LOG_SLOW_ERROR("Failed to start async logger for fx_exec_recond");
     }
