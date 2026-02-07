@@ -1,11 +1,12 @@
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
-#include <chrono>
-#include <cstdlib>
 
 #include <Aeron.h>
 
@@ -27,7 +28,7 @@ int main(int argc, char** argv) {
     // RDTSC can fail in virtualized environments (Docker on Windows, etc.)
     // Enable only if explicitly requested via environment variable
     const char* use_rdtsc_env = std::getenv("USE_RDTSC");
-    hot_cfg.use_rdtsc = (use_rdtsc_env && std::string(use_rdtsc_env) == "1");
+    hot_cfg.use_rdtsc = (use_rdtsc_env && std::strcmp(use_rdtsc_env, "1") == 0);
     if (!init_hot_logger(hot_cfg)) {
         LOG_SLOW_ERROR("Failed to start async logger for fx_exec_recond");
     }
