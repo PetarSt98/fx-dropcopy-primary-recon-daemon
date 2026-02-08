@@ -4,16 +4,16 @@ services:
       context: .
       target: runtime
     image: fx-recon:runtime
-    command: ["aeronmd", "-Daeron.dir=/var/tmp/aeron", "-Daeron.socket.soReusePort=true"]
+    entrypoint: []
+    command: ["aeronmd", "-Daeron.dir=/dev/shm/aeron-media", "-Daeron.socket.soReusePort=true"]
     environment:
-      - AERON_DIR=/var/tmp/aeron
-    volumes:
-      - aeron-md-data:/var/tmp/aeron
+      - AERON_DIR=/dev/shm/aeron-media
     networks:
       - recon-net
     ports:
       - "20121:20121/udp"
       - "20122:20122/udp"
+    shm_size: 512m
 
   recon-daemon:
     build:
@@ -23,12 +23,12 @@ services:
     depends_on:
       - aeron-media-driver
     environment:
-      - AERON_DIR=/var/tmp/aeron
-    volumes:
-      - aeron-md-data:/var/tmp/aeron
+      - AERON_DIR=/dev/shm/aeron-media
     networks:
       - recon-net
     command: ["aeron:udp?endpoint=aeron-media-driver:20121", "1001", "aeron:udp?endpoint=aeron-media-driver:20122", "1002"]
+    shm_size: 256m
+    ipc: container:aeron-media-driver
 
   unit-tests:
     build:

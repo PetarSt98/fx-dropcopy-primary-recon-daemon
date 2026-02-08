@@ -74,13 +74,18 @@ private:
 };
 
 pid_t launch_media_driver(const std::filesystem::path& aeron_dir) {
+    std::cerr << "[LAUNCH] Starting media driver for dir: " << aeron_dir.string() << std::endl;
     pid_t pid = fork();
+    std::cerr << "[LAUNCH] Fork returned pid: " << pid << std::endl;
     if (pid == 0) {
         const std::string dir_arg = "-Daeron.dir=" + aeron_dir.string();
+        std::cerr << "[LAUNCH] Child process, dir_arg: " << dir_arg << std::endl;
         execlp("aeronmd", "aeronmd", dir_arg.c_str(), "-Daeron.socket.soReusePort=true", nullptr);
-        std::cerr << "Failed to exec aeronmd" << std::endl;
+        std::cerr << "[LAUNCH] Failed to exec aeronmd" << std::endl;
+        std::cerr << "[LAUNCH] Exiting child process with status 127" << std::endl; 
         std::_Exit(127);
     }
+    std::cerr << "[LAUNCH] Parent process, pid: " << pid << std::endl;
     return pid;
 }
 
@@ -311,6 +316,7 @@ public:
     explicit AeronTestEnvironment(const Config& cfg)
         : config_(cfg)
         , aeron_dir_(make_unique_aeron_dir())
+        , aeron_dir_str_(aeron_dir_.string())
         , media_driver_(launch_media_driver(aeron_dir_))
         , primary_ring_(std::make_unique<ingest::Ring>())
         , dropcopy_ring_(std::make_unique<ingest::Ring>())
@@ -318,7 +324,10 @@ public:
         , store_(arena_, 1u << 12)
         , timer_wheel_(0)
     {
-        setenv("AERON_DIR", aeron_dir_.string().c_str(), 1);
+        std::cerr << "[TEST] Constructor started" << std::endl;
+        std::cerr << "[TEST] aeron_dir: " << aeron_dir_.string() << std::endl;
+        std::cerr << "[TEST] aeron_dir_str_: " << aeron_dir_str_ << std::endl;
+        std::cerr << "[TEST] Checking media driver validity..." << std::endl;
         
         if (!media_driver_.valid()) {
             throw std::runtime_error("Failed to start Aeron media driver");
@@ -336,7 +345,7 @@ public:
 
         // Setup Aeron context and client
         aeron::Context context;
-        context.aeronDir(aeron_dir_.string());
+        context.aeronDir(aeron_dir_str_.c_str());
         client_ = aeron::Aeron::connect(context);
 
         // Create reconciler
@@ -371,8 +380,8 @@ public:
         // Creating a separate timer thread would cause race conditions and double-polling.
 
         // Setup publisher client
-        aeron::Context pub_context;
-        pub_context.aeronDir(aeron_dir_.string());
+ aeron::Context pub_context;
+        pub_context.aeronDir(aeron_dir_str_.c_str());
         pub_client_ = aeron::Aeron::connect(pub_context);
 
         // Give subscribers time to connect and start polling
@@ -415,6 +424,7 @@ private:
 
     Config config_;
     std::filesystem::path aeron_dir_;
+    std::string aeron_dir_str_;
     ProcessGuard media_driver_;
     
     std::unique_ptr<ingest::Ring> primary_ring_;
@@ -447,13 +457,15 @@ private:
 } // namespace
 
 TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
+    std::cerr << "[TEST-E2E] Test starting..." << std::endl;
     const std::string primary_channel = "aeron:udp?endpoint=localhost:20121";
     const std::string dropcopy_channel = "aeron:udp?endpoint=localhost:20122";
     constexpr std::int32_t primary_stream = 1001;
     constexpr std::int32_t dropcopy_stream = 1002;
 
     const auto aeron_dir = make_unique_aeron_dir();
-    setenv("AERON_DIR", aeron_dir.string().c_str(), 1);
+    const std::string aeron_dir_str = aeron_dir.string();
+    // setenv("AERON_DIR", aeron_dir_str.c_str(), 1);
 
     ProcessGuard media_driver(launch_media_driver(aeron_dir));
     ASSERT_TRUE(media_driver.valid()) << "Failed to start Aeron media driver";
@@ -474,7 +486,7 @@ TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
     core::OrderStateStore store(arena, order_capacity_hint);
 
     aeron::Context context;
-    context.aeronDir(aeron_dir.string());
+    context.aeronDir(aeron_dir_str);
     auto client = aeron::Aeron::connect(context);
 
     core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
@@ -511,7 +523,7 @@ TEST(AeronFlowIntegrationTest, EndToEndConsumesBothStreams) {
     const auto guard = std::unique_ptr<void, std::function<void(void*)>>(nullptr, [&](void*) { cleanup(); });
 
     aeron::Context pub_context;
-    pub_context.aeronDir(aeron_dir.string());
+    pub_context.aeronDir(aeron_dir_str);
     auto pub_client = aeron::Aeron::connect(pub_context);
 
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
@@ -873,9 +885,4 @@ TEST(AeronFlowIntegrationTest, DISABLED_GapSuppressesDivergenceEndToEnd) {
     // Don't check divergence ring because gap might close during cleanup and emit divergence
     // The important thing is that gap_suppressions > 0, showing suppression occurred
 }
-
-
-
-
-
 

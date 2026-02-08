@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <type_traits>
 
 namespace ingest {
@@ -15,7 +16,7 @@ class alignas(64) SpscRing {
                   "Capacity must be power of two");
 
 public:
-    SpscRing() : head_(0), tail_(0) {}
+    SpscRing() : head_(0), tail_(0), buffer_(std::make_unique<T[]>(CapacityPowerOf2)) {}
 
     bool try_push(const T& v) noexcept {
         const auto head = head_.load(std::memory_order_relaxed);
@@ -53,7 +54,7 @@ private:
 
     alignas(64) std::atomic<std::size_t> head_;
     alignas(64) std::atomic<std::size_t> tail_;
-    T buffer_[CapacityPowerOf2];
+    std::unique_ptr<T[]> buffer_;
 };
 
 } // namespace ingest

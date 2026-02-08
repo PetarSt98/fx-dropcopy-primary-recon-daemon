@@ -14,7 +14,11 @@ inline uint64_t rdtsc(bool fence = false) noexcept {
 #if defined(_MSC_VER)
         _mm_lfence();
 #elif defined(__GNUC__)
-        __asm__ __volatile__("lfence" ::: "memory");
+        unsigned int eax, ebx, ecx, edx;
+        __asm__ __volatile__("cpuid"
+                             : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                             : "a"(0)
+                             : "memory");
 #endif
     }
     unsigned int lo = 0, hi = 0;

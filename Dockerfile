@@ -65,6 +65,7 @@ RUN sed -i '/backports/d' /etc/apt/sources.list \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libstdc++6 \
+        libbsd0 \
         openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
