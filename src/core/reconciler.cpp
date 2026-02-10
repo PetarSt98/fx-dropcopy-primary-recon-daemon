@@ -295,26 +295,26 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
     // This provides faster gap closure than the periodic check_gap_timeouts() in run().
     // IMPORTANT: Use util::rdtsc() to get current time. last_poll_tsc_ is only updated
     // on events and would stay stale if no events arrive, causing infinite gap suppression.
-    const std::uint64_t now = util::rdtsc();
-    const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
+    // const std::uint64_t now = util::rdtsc();
+    // const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
 
-    if (primary_seq_tracker_.gap_open) {
-        if (primary_seq_tracker_.gap_detected_tsc > 0 &&
-            now > primary_seq_tracker_.gap_detected_tsc &&
-            (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-            close_gap(primary_seq_tracker_);
-            ++counters_.gaps_closed_by_timeout;
-        }
-    }
+    // if (primary_seq_tracker_.gap_open) {
+    //     if (primary_seq_tracker_.gap_detected_tsc > 0 &&
+    //         now > primary_seq_tracker_.gap_detected_tsc &&
+    //         (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+    //         close_gap(primary_seq_tracker_);
+    //         ++counters_.gaps_closed_by_timeout;
+    //     }
+    // }
 
-    if (dropcopy_seq_tracker_.gap_open) {
-        if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
-            now > dropcopy_seq_tracker_.gap_detected_tsc &&
-            (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-            close_gap(dropcopy_seq_tracker_);
-            ++counters_.gaps_closed_by_timeout;
-        }
-    }
+    // if (dropcopy_seq_tracker_.gap_open) {
+    //     if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
+    //         now > dropcopy_seq_tracker_.gap_detected_tsc &&
+    //         (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
+    //         close_gap(dropcopy_seq_tracker_);
+    //         ++counters_.gaps_closed_by_timeout;
+    //     }
+    // }
 
     return false;
 }
@@ -382,9 +382,17 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         return;
     }
 
+    // Get current time for all checks
+    const std::uint64_t now = util::rdtsc();
+    
+    // CRITICAL: Check gap timeouts before suppression check
+    // Without this, gaps can remain open for up to 1 second longer than gap_timeout_ns
+    // (since check_gap_timeouts in run() only executes once per second).
+    // This ensures timely gap closure when making reconciliation decisions.
+    check_gap_timeouts(now);
+
     // Re-check mismatch at expiration time (use same tolerances as main reconciliation path)
     const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
-    const std::uint64_t now = last_poll_tsc_;  // Use last known time
 
     if (mismatch.none()) {
         // Mismatch resolved - false positive avoided
@@ -392,27 +400,34 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         ++counters_.false_positive_avoided;
         ++counters_.orders_matched;
     } else if (is_gap_suppressed(*os)) {
-        // Gap still open - suppress and reschedule
-        os->recon_state = ReconState::SuppressedByGap;
-        if (timer_wheel_) {
-            // Convert nanoseconds config to TSC cycles before adding to TSC timestamp
-            const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + util::ns_to_tsc(config_.gap_recheck_period_ns));
-            if (!rescheduled) {
-                // Timer overflow during gap recheck - emit divergence
-                ++counters_.timer_overflow;
-                os->recon_state = ReconState::DivergedConfirmed;
-                emit_confirmed_divergence(*os, mismatch, now);
-                ++counters_.mismatch_confirmed;
-                return;
-            }
+    os->recon_state = ReconState::SuppressedByGap;
+    
+    // Only reschedule if we haven't exceeded max suppression time
+    const std::uint64_t suppression_duration = now - os->mismatch_first_seen_tsc;
+    const std::uint64_t max_suppression_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
+    
+    if (suppression_duration < max_suppression_tsc && timer_wheel_) {
+        const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + util::ns_to_tsc(config_.gap_recheck_period_ns));
+        if (!rescheduled) {
+            ++counters_.timer_overflow;
+            os->recon_state = ReconState::DivergedConfirmed;
+            emit_confirmed_divergence(*os, mismatch, now);
+            ++counters_.mismatch_confirmed;
+            return;
         }
         ++counters_.gap_suppressions;
     } else {
-        // Confirmed divergence
+        // Max suppression time exceeded - emit divergence
         os->recon_state = ReconState::DivergedConfirmed;
         emit_confirmed_divergence(*os, mismatch, now);
         ++counters_.mismatch_confirmed;
     }
+} else {
+    // Confirmed divergence
+    os->recon_state = ReconState::DivergedConfirmed;
+    emit_confirmed_divergence(*os, mismatch, now);
+    ++counters_.mismatch_confirmed;
+}
 }
 
 void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch,

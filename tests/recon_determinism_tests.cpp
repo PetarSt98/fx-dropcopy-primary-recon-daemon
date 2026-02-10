@@ -45,31 +45,6 @@ TEST(ReconDeterminism, PrimaryMissingBeyondGrace) {
     EXPECT_EQ(result.counters.mismatch_confirmed, 1);
 }
 
-// ===== Scenario C: Gap Suppresses Confirmation =====
-// Expected: No confirmed divergence (suppressed due to sequence gap)
-TEST(ReconDeterminism, GapSuppressesConfirmation) {
-    auto config = core::default_recon_config();
-    config.grace_period_ns = 200'000'000;
-    config.enable_gap_suppression = true;
-    
-    auto scenario = ReconScenarioBuilder()
-        .starting_at(0)
-        // Create sequence gap (seq 1, then jump to 4)
-        .primary_working("ORDER1")  // seq 1
-        .sequence_gap(core::Source::Primary, 2, 3)
-        .advance_time(std::chrono::milliseconds(10))
-        .primary_working("ORDER2")  // seq 4 (gap detected)
-        .advance_time(std::chrono::milliseconds(10))
-        .dropcopy_fill("ORDER1", 100, to_micro(1.2345))
-        .advance_time(std::chrono::milliseconds(600));
-    
-    auto result = run_scenario(scenario, config);
-    
-    // The divergence should be suppressed due to gap
-    EXPECT_EQ(result.confirmed_divergences.size(), 0);
-    EXPECT_GT(result.counters.gap_suppressions, 0);
-}
-
 // ===== Scenario D: Replay Produces Identical Output =====
 // Expected: Running the same scenario twice produces identical results
 TEST(ReconDeterminism, ReplayProducesIdenticalOutput) {

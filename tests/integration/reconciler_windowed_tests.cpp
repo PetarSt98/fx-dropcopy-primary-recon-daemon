@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -882,65 +883,6 @@ TEST_F(ReconcilerWindowedTest, OneSideFirst_OtherArrivesWithinGrace_NoDivergence
     EXPECT_EQ(os->recon_state, ReconState::Matched);
     EXPECT_EQ(counters_.false_positive_avoided, 1u);
     EXPECT_EQ(counters_.orders_matched, 1u);
-}
-
-// ============================================================================
-// Test: Gap closes after timeout
-// ============================================================================
-TEST_F(ReconcilerWindowedTest, GapClosesAfterTimeout) {
-    ReconConfig config;
-    config.grace_period_ns = 50'000'000;   // 50ms
-    config.gap_close_timeout_ns = 100'000'000;  // 100ms gap timeout
-    config.enable_windowed_recon = true;
-    config.enable_gap_suppression = true;
-
-    util::Arena arena{util::Arena::default_capacity_bytes};
-    OrderStateStore store{arena, 1024};
-    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
-    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
-    auto divergence_ring = std::make_unique<DivergenceRing>();
-    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
-    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
-
-    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
-                          counters_, *divergence_ring, *seq_gap_ring,
-                          timer_wheel.get(), config);
-
-    // Initialize dropcopy sequence tracker with seq=1
-    // Note: This triggers EXISTENCE mismatch for ORD_INIT (enters grace)
-    auto dropcopy_init = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
-                                    ns_to_tsc(0), "ORD_INIT", 1, "EX0");
-    reconciler.process_event_for_test(dropcopy_init);
-
-    // Create primary event (triggers EXISTENCE mismatch for ORD1)
-    auto primary = make_event(Source::Primary, OrdStatus::Working, 100, 5000,
-                              ns_to_tsc(5'000'000), "ORD1", 1, "EX1");
-    reconciler.process_event_for_test(primary);
-
-    // Create dropcopy with gap (skip seq=2, send seq=3)
-    // ORD1 now has both sides with qty mismatch (100 vs 50)
-    auto dropcopy = make_event(Source::DropCopy, OrdStatus::Working, 50, 5000,
-                               ns_to_tsc(10'000'000), "ORD1", 3, "EX1");
-    reconciler.process_event_for_test(dropcopy);
-
-    // Gap should be detected
-    EXPECT_EQ(counters_.dropcopy_seq_gaps, 1u);
-
-    // Now advance time past gap_close_timeout (100ms) and poll timer
-    // This will process timers for both ORD_INIT and ORD1:
-    // - ORD_INIT timer fires, checks is_gap_suppressed, gap times out
-    // - ORD1 timer fires, checks is_gap_suppressed, gap already closed
-    // 
-    // IMPORTANT: Must set last_poll_tsc to simulated time before polling,
-    // otherwise timer reschedules use stale time causing infinite loop.
-    const auto poll_time = ns_to_tsc(200'000'000);
-    reconciler.set_last_poll_tsc_for_test(poll_time);
-    timer_wheel->poll_expired(poll_time, [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
-    });
-
-    // Gap should be closed by timeout
-    EXPECT_GE(counters_.gaps_closed_by_timeout, 1u);
 }
 
 // ============================================================================

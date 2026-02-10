@@ -332,63 +332,87 @@ public:
         if (!media_driver_.valid()) {
             throw std::runtime_error("Failed to start Aeron media driver");
         }
+                std::cerr << "[TEST] Media driver is valid, waiting for cnc.dat..." << std::endl;
 
+        std::cerr << "[TEST] About to wait for cnc.dat..." << std::endl;
         const auto cnc_path = aeron_dir_ / "cnc.dat";
         if (!wait_for_file(cnc_path, std::chrono::seconds{5})) {
             throw std::runtime_error("Aeron media driver did not create cnc.dat");
         }
-
+        std::cerr << "[TEST] cnc.dat found!" << std::endl;
         // Setup reconciler config
+         std::cerr << "[TEST] Setting up reconciler config..." << std::endl;
         recon_config_ = core::default_recon_config();
         recon_config_.grace_period_ns = config_.grace_period_ns;
         recon_config_.enable_gap_suppression = config_.enable_gap_suppression;
 
         // Setup Aeron context and client
+        std::cerr << "[TEST] Creating Aeron context..." << std::endl;
         aeron::Context context;
         context.aeronDir(aeron_dir_str_.c_str());
+        std::cerr << "[TEST] About to call Aeron::connect()..." << std::endl;
         client_ = aeron::Aeron::connect(context);
+        std::cerr << "[TEST] Aeron client connected!" << std::endl;
 
         // Create reconciler
+         std::cerr << "[TEST] Creating reconciler..." << std::endl;
         if (config_.enable_timer_wheel) {
+            std::cerr << "[TEST] Creating reconciler WITH timer wheel..." << std::endl;
             reconciler_ = std::make_unique<core::Reconciler>(
                 stop_flag_, *primary_ring_, *dropcopy_ring_, store_, counters_,
                 divergence_ring_, seq_gap_ring_, &timer_wheel_, recon_config_);
         } else {
+           std::cerr << "[TEST] Creating reconciler WITHOUT timer wheel..." << std::endl;
             reconciler_ = std::make_unique<core::Reconciler>(
                 stop_flag_, *primary_ring_, *dropcopy_ring_, store_, counters_,
                 divergence_ring_, seq_gap_ring_);
         }
-
-        // Create subscribers
+std::cerr << "[TEST] Reconciler created!" << std::endl;
+// Create subscribers
+std::cerr << "[TEST] Creating subscribers..." << std::endl;
+std::cerr << "[TEST] client_ use_count before primary: " << client_.use_count() << std::endl;
         primary_sub_ = std::make_unique<ingest::AeronSubscriber>(
             config_.primary_channel, config_.primary_stream,
             *primary_ring_, primary_stats_, core::Source::Primary,
             client_, stop_flag_);
-        
+std::cerr << "[TEST] Primary subscriber created!" << std::endl;
+std::cerr << "[TEST] client_ use_count after primary: " << client_.use_count() << std::endl;
+
+std::cerr << "[TEST] About to create dropcopy subscriber..." << std::endl;
         dropcopy_sub_ = std::make_unique<ingest::AeronSubscriber>(
             config_.dropcopy_channel, config_.dropcopy_stream,
             *dropcopy_ring_, dropcopy_stats_, core::Source::DropCopy,
             client_, stop_flag_);
-
-        // Start threads
-        primary_thread_ = std::thread([this] { primary_sub_->run(); });
-        dropcopy_thread_ = std::thread([this] { dropcopy_sub_->run(); });
-        recon_thread_ = std::thread([this] { reconciler_->run(); });
-
+            std::cerr << "[TEST] Dropcopy subscriber created!" << std::endl;
         // Note: Do NOT create a separate timer thread!
         // The reconciler's run() loop already polls the timer wheel internally.
         // Creating a separate timer thread would cause race conditions and double-polling.
-
+std::cerr << "[TEST] Dropcopy subscriber created!" << std::endl;
         // Setup publisher client
- aeron::Context pub_context;
-        pub_context.aeronDir(aeron_dir_str_.c_str());
-        pub_client_ = aeron::Aeron::connect(pub_context);
+std::cerr << "[TEST] Setting up publisher client..." << std::endl;
+pub_client_ = client_;
+std::cerr << "[TEST] Publisher client ready!" << std::endl;
 
         // Give subscribers time to connect and start polling
         // This ensures the Aeron subscribers discover publishers when we create publications
-        std::this_thread::sleep_for(SUBSCRIBER_CONNECTION_DELAY_MS);
-    }
+std::cerr << "[TEST] Sleeping for connection delay..." << std::endl;
+std::this_thread::sleep_for(SUBSCRIBER_CONNECTION_DELAY_MS);
+std::cerr << "[TEST] Connection delay complete!" << std::endl;
+            // Start threads AFTER publisher is ready to avoid race condition
+std::cerr << "[TEST] Starting primary thread..." << std::endl;
+primary_thread_ = std::thread([this] { primary_sub_->run(); });
+std::cerr << "[TEST] Primary thread started!" << std::endl;
 
+std::cerr << "[TEST] Starting dropcopy thread..." << std::endl;
+dropcopy_thread_ = std::thread([this] { dropcopy_sub_->run(); });
+std::cerr << "[TEST] Dropcopy thread started!" << std::endl;
+
+std::cerr << "[TEST] Starting reconciler thread..." << std::endl;
+recon_thread_ = std::thread([this] { reconciler_->run(); });
+std::cerr << "[TEST] Reconciler thread started!" << std::endl;
+std::this_thread::sleep_for(std::chrono::milliseconds{200});
+std::cerr << "[TEST] Constructor complete!" << std::endl;
+        }
     ~AeronTestEnvironment() {
         cleanup();
     }
@@ -825,10 +849,10 @@ TEST(AeronFlowIntegrationTest, SequenceGapDetectedEndToEnd) {
 
 // ===== Test 5: Gap Suppression of Divergences =====
 // DISABLED: Test hangs intermittently, needs investigation
-TEST(AeronFlowIntegrationTest, DISABLED_GapSuppressesDivergenceEndToEnd) {
+TEST(AeronFlowIntegrationTest, GapSuppressesDivergenceEndToEnd) {
     // Scenario: Sequence gap present when divergence would normally confirm
     // Expected: Divergence is suppressed (not emitted)
-
+    std::cerr << "[TEST_BODY] Test body starting..." << std::endl;
     AeronTestEnvironment::Config config{
         .primary_channel = "aeron:udp?endpoint=localhost:20133",
         .dropcopy_channel = "aeron:udp?endpoint=localhost:20134",
@@ -838,20 +862,30 @@ TEST(AeronFlowIntegrationTest, DISABLED_GapSuppressesDivergenceEndToEnd) {
         .enable_gap_suppression = true,
         .enable_timer_wheel = true
     };
+    std::cerr << "[TEST_BODY] Config created" << std::endl;
     AeronTestEnvironment env(config);
-
+std::cerr << "[TEST_BODY] Environment created" << std::endl;
     const auto publish_deadline = Clock::now() + std::chrono::seconds{10};
+std::cerr << "[TEST_BODY] Creating publications..." << std::endl;
     auto primary_pub = make_publication(*env.pub_client(), env.primary_channel(),
                                        env.primary_stream(), publish_deadline);
+std::cerr << "[TEST_BODY] Primary publication created" << std::endl;
     auto dropcopy_pub = make_publication(*env.pub_client(), env.dropcopy_channel(),
                                         env.dropcopy_stream(), publish_deadline);
+    std::cerr << "[TEST_BODY] Dropcopy publication created" << std::endl;
+    
     ASSERT_TRUE(primary_pub && dropcopy_pub) << "Failed to create publications";
 
     // Wait for publications to be ready
+   std::cerr << "[TEST_BODY] Waiting for primary publication ready..." << std::endl;
     ASSERT_TRUE(wait_for_publication_ready(*primary_pub, publish_deadline)) 
         << "Primary publication not ready";
+    std::cerr << "[TEST_BODY] Primary publication ready!" << std::endl;
+    
+    std::cerr << "[TEST_BODY] Waiting for dropcopy publication ready..." << std::endl;
     ASSERT_TRUE(wait_for_publication_ready(*dropcopy_pub, publish_deadline)) 
         << "Dropcopy publication not ready";
+    std::cerr << "[TEST_BODY] Dropcopy publication ready!" << std::endl;
 
     // Create sequence gap on primary stream (seq 1, then seq 5)
     auto primary_evt1 = make_wire_exec_custom(1, "GAP_ORDER1", 100, 1234500);
@@ -870,19 +904,23 @@ TEST(AeronFlowIntegrationTest, DISABLED_GapSuppressesDivergenceEndToEnd) {
         << "Failed to publish dropcopy fill";
 
     // Wait for messages to be consumed
+    std::cerr << "[TEST_BODY] Waiting for message consumption..." << std::endl;
     ASSERT_TRUE(wait_for_message_consumption(env.counters(), 2, 1, std::chrono::seconds{2}))
         << "Messages not consumed: internal=" << env.counters().internal_events 
         << " dropcopy=" << env.counters().dropcopy_events;
+    std::cerr << "[TEST_BODY] Messages consumed!" << std::endl;
 
     // Wait for grace period only (don't wait for full gap timeout)
-    // This allows us to check that suppression is happening without waiting
-    // for the eventual divergence emission after gap closes
+    std::cerr << "[TEST_BODY] Waiting for grace period..." << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds{400});
+    std::cerr << "[TEST_BODY] Grace period complete!" << std::endl;
 
-    // Verify: gap_suppressions counter incremented (gap was detected and divergence suppressed)
+    // Verify: gap_suppressions counter incremented
+    std::cerr << "[TEST_BODY] Checking gap_suppressions counter..." << std::endl;
+    std::cerr << "[TEST_BODY] gap_suppressions = " << env.counters().gap_suppressions << std::endl;
     EXPECT_GT(env.counters().gap_suppressions, 0) << "Expected gap_suppressions counter > 0";
     
+    std::cerr << "[TEST_BODY] Test complete!" << std::endl;
     // Don't check divergence ring because gap might close during cleanup and emit divergence
     // The important thing is that gap_suppressions > 0, showing suppression occurred
 }
-
