@@ -238,8 +238,10 @@ launch_publisher() {
     log "Launching ${name} publisher"
     
     # Calculate sleep_ms to achieve desired rate
-    # For 10k orders/sec, we want 0.1ms sleep (but publisher uses sleep_ms)
-    # Actually, at high rates we should use 0 or very small sleep
+    # The publisher sleeps sleep_ms after each event
+    # For rates >= 1000/sec, use 0ms (busy loop with yield on backpressure)
+    # For rates < 1000/sec, calculate sleep_ms = 1000ms / rate
+    # Example: 100 orders/sec -> 10ms sleep per event
     local sleep_ms=0
     if [[ "${ORDERS_PER_SEC}" -lt 1000 ]]; then
         sleep_ms=$((1000 / ORDERS_PER_SEC))
@@ -350,7 +352,7 @@ print_summary() {
     echo "  MediaDriver: ${MEDIA_DRIVER_LOG}"
     echo "  Reconciler:  ${RECOND_LOG}"
     echo "  Primary pub: ${PRIMARY_PUB_LOG}"
-    echo "  Dropcopy pub:${DROPCOPY_PUB_LOG}"
+    echo "  Dropcopy pub: ${DROPCOPY_PUB_LOG}"
     echo ""
     echo "Analysis:"
     echo "  Run: python3 ${SCRIPT_DIR}/analyze_soak_test.py ${METRICS_CSV}"
