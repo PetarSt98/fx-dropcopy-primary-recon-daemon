@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include "util/perf_macros.hpp"
 
 namespace core {
 
@@ -49,6 +50,8 @@ OrderStateStore::OrderStateStore(util::Arena& arena, std::size_t capacity_hint)
 }
 
 OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
+    PERF_SCOPE(util::PerfCounterId::HashTableUpsert);
+    
     const OrderKey key = make_order_key(ev);
     if (key == empty_key_) {
         ++overflow_count_;
@@ -82,6 +85,8 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
 }
 
 OrderState* OrderStateStore::find(OrderKey key) noexcept {
+    PERF_SCOPE(util::PerfCounterId::HashTableLookup);
+    
     if (key == empty_key_) {
         return nullptr;
     }

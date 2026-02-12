@@ -8,6 +8,7 @@
 #include "util/async_log.hpp"
 #include "util/rdtsc.hpp"
 #include "util/tsc_calibration.hpp"
+#include "util/perf_macros.hpp"
 
 // CPU pause intrinsics for HFT busy-wait loops
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
@@ -83,6 +84,8 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 }
 
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
+    PERF_SCOPE(util::PerfCounterId::ReconcilerProcessEvent);
+    
     // === Sequence tracking (unchanged) ===
     SequenceGapEvent gap_ev{};
     SequenceGapEvent* gap_ptr = &gap_ev;

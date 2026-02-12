@@ -7,6 +7,7 @@
 
 #include "util/fixed_vec.hpp"
 #include "util/tsc_calibration.hpp"
+#include "util/perf_macros.hpp"
 #include "core/order_state.hpp"  // For OrderKey
 
 namespace util {
@@ -88,6 +89,8 @@ public:
     // on the next poll_expired() call.
     [[nodiscard]] bool schedule(core::OrderKey key, std::uint32_t generation,
                                 std::uint64_t deadline_tsc) noexcept {
+        PERF_SCOPE(util::PerfCounterId::TimerWheelSchedule);
+        
         ++stats_.scheduled;
 
         const std::uint64_t deadline_tick = deadline_tsc / tick_tsc_;
@@ -122,6 +125,8 @@ public:
     // Complexity: O(number of expired entries), NOT O(total scheduled)
     template <typename F>
     void poll_expired(std::uint64_t now_tsc, F&& on_expired) noexcept {
+        PERF_SCOPE(util::PerfCounterId::TimerWheelPollExpired);
+        
         const std::uint64_t now_tick = now_tsc / tick_tsc_;
 
         // Process all ticks from last poll to now

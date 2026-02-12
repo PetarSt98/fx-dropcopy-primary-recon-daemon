@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <memory>
 #include <type_traits>
+#include "util/perf_macros.hpp"
 
 namespace ingest {
 
@@ -19,6 +20,8 @@ public:
     SpscRing() : head_(0), tail_(0), buffer_(std::make_unique<T[]>(CapacityPowerOf2)) {}
 
     bool try_push(const T& v) noexcept {
+        PERF_SCOPE(util::PerfCounterId::SpscRingPush);
+        
         const auto head = head_.load(std::memory_order_relaxed);
         const auto next_head = increment(head);
         if (next_head == tail_.load(std::memory_order_acquire)) {
@@ -30,6 +33,8 @@ public:
     }
 
     bool try_pop(T& out) noexcept {
+        PERF_SCOPE(util::PerfCounterId::SpscRingPop);
+        
         const auto tail = tail_.load(std::memory_order_relaxed);
         if (tail == head_.load(std::memory_order_acquire)) {
             return false; // empty

@@ -5,10 +5,20 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Performance instrumentation option (default: OFF for zero overhead)
+option(FX_PERF_ENABLED "Enable performance instrumentation" OFF)
+
 if(MSVC)
   add_compile_options(/W4 /permissive-)
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+if(FX_PERF_ENABLED)
+  add_compile_definitions(FX_PERF_ENABLED)
+  message(STATUS "Performance instrumentation: ENABLED")
+else()
+  message(STATUS "Performance instrumentation: DISABLED (zero overhead)")
 endif()
 
 include(GNUInstallDirs)
@@ -43,6 +53,9 @@ add_library(fx_core
     src/util/log.hpp
     src/util/soh.hpp
     src/util/arena.hpp
+    src/util/latency_histogram.hpp
+    src/util/perf_counters.hpp
+    src/util/perf_macros.hpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -220,6 +233,7 @@ add_executable(unit_tests_gtest
     tests/recon_timer_tests.cpp
     tests/recon_config_tests.cpp
     tests/reconciler_two_stage_tests.cpp
+    tests/latency_tracking_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

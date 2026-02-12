@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <new>
+#include "util/perf_macros.hpp"
 
 namespace util {
 
@@ -26,6 +27,8 @@ public:
     Arena& operator=(Arena&&) = default;
 
     [[nodiscard]] void* allocate(std::size_t size, std::size_t alignment) noexcept {
+        PERF_SCOPE(util::PerfCounterId::ArenaAllocate);
+        
         if (alignment == 0 || !buffer_) {
             return nullptr;
         }

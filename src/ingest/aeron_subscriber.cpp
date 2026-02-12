@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "util/rdtsc.hpp"
+#include "util/perf_macros.hpp"
 
 namespace ingest {
 
@@ -74,7 +75,10 @@ void AeronSubscriber::run() {
 
     int idle_count = 0;
     while (!stop_flag_.load(std::memory_order_acquire)) {
+        PERF_START(aeron_poll);
         const int fragments = subscription->poll(handler, fragment_limit);
+        PERF_STOP(aeron_poll, util::PerfCounterId::AeronPoll);
+        
         if (fragments == 0) {
             if (idle_count < 32) {
                 ++idle_count;
