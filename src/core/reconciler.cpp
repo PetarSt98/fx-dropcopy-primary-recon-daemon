@@ -208,6 +208,15 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
             increment_divergence_counter(div.type);
         }
     }
+
+    // End-to-end latency: from Aeron ingest timestamp to reconciliation complete.
+    // Covers ring transit time + full process_event() work.
+    PERF_IF_ENABLED({
+        const std::uint64_t e2e_ns = ::util::tsc_to_ns(::util::rdtsc() - ev.ingest_tsc);
+        ::util::PerfRegistry::instance()
+            .get(::util::PerfCounterId::EndToEndLatency)
+            .record_latency(e2e_ns);
+    });
 }
 
 void Reconciler::run() {

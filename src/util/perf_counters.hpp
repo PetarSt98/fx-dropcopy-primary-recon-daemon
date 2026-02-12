@@ -23,6 +23,7 @@ enum class PerfCounterId : std::size_t {
     SpscRingPop,
     AeronPoll,
     MismatchCompute,
+    EndToEndLatency,
     COUNT  // Must be last - represents total count of counter IDs
 };
 
@@ -82,6 +83,7 @@ public:
         dump_counter(PerfCounterId::SpscRingPop, "SpscRingPop");
         dump_counter(PerfCounterId::AeronPoll, "AeronPoll");
         dump_counter(PerfCounterId::MismatchCompute, "MismatchCompute");
+        dump_counter(PerfCounterId::EndToEndLatency, "EndToEndLatency (ingest -> recon complete)");
         
         std::fprintf(stderr, "\n");
     }

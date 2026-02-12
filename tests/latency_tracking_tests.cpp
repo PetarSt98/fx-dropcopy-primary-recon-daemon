@@ -573,6 +573,8 @@ TEST_F(LatencyHistogramTest, FullPerfReport) {
         << "MismatchCompute was not exercised";
     EXPECT_GT(registry.get(util::PerfCounterId::ReconcilerProcessEvent).count, 0)
         << "ReconcilerProcessEvent was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::EndToEndLatency).count, 0)
+        << "EndToEndLatency was not exercised";
 }
 
 #endif // FX_PERF_ENABLED
