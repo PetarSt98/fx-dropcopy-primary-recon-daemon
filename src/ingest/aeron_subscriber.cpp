@@ -77,7 +77,9 @@ void AeronSubscriber::run() {
     while (!stop_flag_.load(std::memory_order_acquire)) {
         PERF_START(aeron_poll);
         const int fragments = subscription->poll(handler, fragment_limit);
-        PERF_STOP(aeron_poll, util::PerfCounterId::AeronPoll);
+        if (fragments > 0) {
+            PERF_STOP(aeron_poll, util::PerfCounterId::AeronPoll);
+        }
         
         if (fragments == 0) {
             if (idle_count < 32) {
