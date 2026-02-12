@@ -1,5 +1,6 @@
 # Build directories
 build/
+build-release/
 cmake-build-*/
 _codeql_build_dir/
 
@@ -13,6 +14,9 @@ _codeql_build_dir/
 # Temporary files
 *.log
 test_*.sh
+
+# Benchmark artifacts
+benchmark_results.json
 
 # Precompiled headers
 *.gch

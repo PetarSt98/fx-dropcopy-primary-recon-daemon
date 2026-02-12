@@ -35,6 +35,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
+FetchContent_Declare(
+    benchmark
+    GIT_REPOSITORY https://github.com/google/benchmark.git
+    GIT_TAG v1.8.3
+)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(benchmark)
+
 add_library(fx_core
     src/ingest/spsc_ring.hpp
     src/ingest/fix_parser.cpp
@@ -285,3 +293,16 @@ gtest_discover_tests(recon_determinism_tests
 
 add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
 target_link_libraries(benchmarks PRIVATE fx_core)
+
+add_executable(reconciler_bench
+    bench/reconciler_bench.cpp
+)
+target_link_libraries(reconciler_bench PRIVATE
+    fx_core
+    benchmark::benchmark
+    benchmark::benchmark_main
+)
+target_include_directories(reconciler_bench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
