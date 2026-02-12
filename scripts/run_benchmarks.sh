@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# Check if benchmark executable exists
+if [ ! -f ./build-release/reconciler_bench ]; then
+    echo "Error: reconciler_bench not found at ./build-release/reconciler_bench"
+    echo "Please build the project first with:"
+    echo "  mkdir -p build-release && cd build-release"
+    echo "  cmake -DCMAKE_BUILD_TYPE=Release .."
+    echo "  cmake --build . --target reconciler_bench"
+    exit 1
+fi
+
 echo "=========================================="
 echo "FX Reconciliation Microbenchmarks"
 echo "=========================================="
