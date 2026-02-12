@@ -1,7 +1,7 @@
 #include <benchmark/benchmark.h>
 
 #include "core/order_state.hpp"
-#include "core/order_state_store.cpp"
+#include "core/order_state_store.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
 #include "util/wheel_timer.hpp"
@@ -106,13 +106,13 @@ BENCHMARK(BM_HashTableUpsert);
 
 static void BM_ArenaAllocate(benchmark::State& state) {
     util::Arena arena(util::Arena::default_capacity_bytes);
+    int alloc_count = 0;
 
     for (auto _ : state) {
         void* ptr = arena.allocate(sizeof(core::OrderState), alignof(core::OrderState));
         benchmark::DoNotOptimize(ptr);
 
         // Reset arena periodically to avoid exhaustion
-        static int alloc_count = 0;
         if (++alloc_count % 10000 == 0) {
             arena.reset();
             alloc_count = 0;
@@ -181,13 +181,13 @@ static void BM_SPSCRing_Push(benchmark::State& state) {
     evt.ord_status = core::OrdStatus::New;
     std::memcpy(evt.clord_id, "ORDER001", 8);
     evt.clord_id_len = 8;
+    int push_count = 0;
 
     for (auto _ : state) {
         bool pushed = ring.try_push(evt);
         benchmark::DoNotOptimize(pushed);
 
         // Pop periodically to avoid filling the ring
-        static int push_count = 0;
         if (++push_count % 1000 == 0) {
             core::ExecEvent dummy;
             for (int i = 0; i < 1000; ++i) {
