@@ -14,6 +14,7 @@
 #include "ingest/aeron_subscriber.hpp"
 #include "util/arena.hpp"
 #include "util/async_log.hpp"
+#include "util/perf_counters.hpp"
 
 int main(int argc, char** argv) {
     if (argc < 5) {
@@ -91,6 +92,8 @@ int main(int argc, char** argv) {
                   static_cast<unsigned long long>(counters.divergence_ring_drops));
 
     util::shutdown_hot_logger();
+
+    util::PerfRegistry::instance().dump();
 
     return 0;
 }
