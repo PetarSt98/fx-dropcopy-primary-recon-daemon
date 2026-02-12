@@ -29,10 +29,15 @@ private:
     std::uint64_t start_tsc_;
 };
 
+// Helper macro for unique variable name generation
+#define PERF_CONCAT_IMPL(a, b) a##b
+#define PERF_CONCAT(a, b) PERF_CONCAT_IMPL(a, b)
+
 // Macro: Scoped latency measurement
 // Usage: PERF_SCOPE(PerfCounterId::ReconcilerProcessEvent);
+// Uses __COUNTER__ to ensure unique variable names even on the same line
 #define PERF_SCOPE(counter_id) \
-    ::util::PerfScopeGuard _perf_guard_##__LINE__(counter_id)
+    ::util::PerfScopeGuard PERF_CONCAT(_perf_guard_, __COUNTER__)(counter_id)
 
 // Macro: Manual start timing
 // Usage: PERF_START(my_timer);
