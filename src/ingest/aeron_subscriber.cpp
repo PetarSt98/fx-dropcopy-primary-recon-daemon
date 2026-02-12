@@ -78,7 +78,7 @@ void AeronSubscriber::run() {
         PERF_START(aeron_poll);
         const int fragments = subscription->poll(handler, fragment_limit);
         if (fragments > 0) {
-            PERF_STOP(aeron_poll, util::PerfCounterId::AeronPoll);
+            PERF_STOP(aeron_poll, ::util::PerfCounterId::AeronPoll);
         }
         
         if (fragments == 0) {

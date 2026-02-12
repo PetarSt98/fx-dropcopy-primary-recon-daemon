@@ -84,7 +84,7 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 }
 
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
-    PERF_SCOPE(util::PerfCounterId::ReconcilerProcessEvent);
+    PERF_SCOPE(::util::PerfCounterId::ReconcilerProcessEvent);
     
     // === Sequence tracking (unchanged) ===
     SequenceGapEvent gap_ev{};

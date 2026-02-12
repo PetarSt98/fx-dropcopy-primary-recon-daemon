@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <memory>
 #include <thread>
 #include <chrono>
 
@@ -9,6 +13,18 @@
 #include "util/perf_macros.hpp"
 #include "util/rdtsc.hpp"
 #include "util/tsc_calibration.hpp"
+
+#ifdef FX_PERF_ENABLED
+#include "core/divergence.hpp"
+#include "core/exec_event.hpp"
+#include "core/order_state.hpp"
+#include "core/order_state_store.hpp"
+#include "core/reconciler.hpp"
+#include "core/recon_config.hpp"
+#include "ingest/spsc_ring.hpp"
+#include "util/arena.hpp"
+#include "util/wheel_timer.hpp"
+#endif
 
 namespace {
 
@@ -252,7 +268,7 @@ TEST_F(LatencyHistogramTest, PerfCounterDump) {
 
 TEST_F(LatencyHistogramTest, MacrosCompile) {
     // Test that macros compile in both enabled and disabled modes
-    PERF_SCOPE(util::PerfCounterId::HashTableLookup);
+    PERF_SCOPE(::util::PerfCounterId::HashTableLookup);
     
     PERF_START(test_timer);
     // Some work
@@ -281,7 +297,7 @@ TEST_F(LatencyHistogramTest, PerfScopeMeasuresTime) {
     registry.reset();
     
     {
-        PERF_SCOPE(util::PerfCounterId::TimerWheelSchedule);
+        PERF_SCOPE(::util::PerfCounterId::TimerWheelSchedule);
         
         // Do some work that takes measurable time
         std::this_thread::sleep_for(std::chrono::microseconds(10));
@@ -345,7 +361,7 @@ TEST_F(LatencyHistogramTest, InstrumentationOverhead) {
     const std::uint64_t start = util::rdtsc();
     
     for (int i = 0; i < iterations; ++i) {
-        PERF_SCOPE(util::PerfCounterId::SpscRingPop);
+        PERF_SCOPE(::util::PerfCounterId::SpscRingPop);
         // Minimal work - just the instrumentation overhead
         volatile int x = i;
         (void)x;
@@ -364,7 +380,199 @@ TEST_F(LatencyHistogramTest, InstrumentationOverhead) {
     EXPECT_LT(avg_ns, 10000) << "Average instrumentation overhead: " << avg_ns << " ns (sanity check)";
     
     // Verify that latency tracking is functioning
-    EXPECT_GT(counter.latency_hist.count(), 0) << "Latency histogram should have recorded samples";
+    EXPECT_GT(counter.latency_hist.count(), 0)
+        << "Latency histogram should have recorded samples";
+
+    registry.dump();
+}
+
+// ============================================================================
+// Comprehensive Performance Report
+// Exercises every instrumented component and dumps all counters with
+// Min/Mean/Max/P50/P99/P99.9 histograms.
+//
+// Run:  ./unit_tests_gtest --gtest_filter="LatencyHistogramTest.FullPerfReport"
+// ============================================================================
+
+TEST_F(LatencyHistogramTest, FullPerfReport) {
+    auto& registry = util::PerfRegistry::instance();
+    registry.reset();
+
+    constexpr int ITERATIONS = 50000;
+
+    // ---- 1. Arena allocation (PerfCounterId::ArenaAllocate) ----
+    {
+        util::Arena arena(2ULL * 1024ULL * 1024ULL);  // 2 MB
+        for (int i = 0; i < ITERATIONS; ++i) {
+            void* ptr = arena.allocate(sizeof(core::OrderState),
+                                       alignof(core::OrderState));
+            (void)ptr;
+            // Reset periodically to avoid exhaustion
+            if ((i & 0xFFF) == 0xFFF) {
+                arena.reset();
+            }
+        }
+    }
+
+    // ---- 2. Hash table upsert + lookup (PerfCounterId::HashTableUpsert,
+    //         PerfCounterId::HashTableLookup) ----
+    {
+        util::Arena arena(4ULL * 1024ULL * 1024ULL);  // 4 MB
+        core::OrderStateStore store(arena, 2048);
+
+        for (int i = 0; i < ITERATIONS; ++i) {
+            core::ExecEvent ev{};
+            ev.ord_status = core::OrdStatus::New;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "ORD%05d", i % 1000);
+            std::memcpy(ev.clord_id, buf, 8);
+            ev.clord_id_len = 8;
+            ev.cum_qty = 0;
+            ev.price_micro = 1000000;
+
+            auto* os = store.upsert(ev);
+            (void)os;
+
+            // Also exercise lookup
+            const core::OrderKey key = core::make_order_key(ev);
+            auto* found = store.find(key);
+            (void)found;
+
+            // Reset periodically to avoid overflow
+            if (i % 1000 == 999) {
+                store.reset_epoch();
+            }
+        }
+    }
+
+    // ---- 3. Timer wheel schedule + poll (PerfCounterId::TimerWheelSchedule,
+    //         PerfCounterId::TimerWheelPollExpired) ----
+    {
+        util::WheelTimer timer(0);
+        const std::uint64_t tick_tsc = timer.tick_tsc();
+
+        for (int i = 0; i < ITERATIONS; ++i) {
+            std::uint64_t deadline = tick_tsc +
+                static_cast<std::uint64_t>(i % 4096) * tick_tsc;
+            timer.schedule(static_cast<core::OrderKey>(i), 0, deadline);
+
+            // Poll periodically to exercise poll_expired
+            if ((i & 0xFF) == 0xFF) {
+                timer.poll_expired(
+                    tick_tsc + static_cast<std::uint64_t>(i) * tick_tsc,
+                    [](core::OrderKey, std::uint32_t) {});
+            }
+        }
+        // Final poll to flush remaining entries
+        timer.poll_expired(
+            tick_tsc * (ITERATIONS + 4096),
+            [](core::OrderKey, std::uint32_t) {});
+    }
+
+    // ---- 4. SPSC ring push + pop (PerfCounterId::SpscRingPush,
+    //         PerfCounterId::SpscRingPop) ----
+    {
+        ingest::SpscRing<core::ExecEvent, 1u << 16> ring;
+        core::ExecEvent evt{};
+        evt.ord_status = core::OrdStatus::New;
+        std::memcpy(evt.clord_id, "ORDER001", 8);
+        evt.clord_id_len = 8;
+
+        for (int i = 0; i < ITERATIONS; ++i) {
+            ring.try_push(evt);
+            core::ExecEvent out;
+            ring.try_pop(out);
+        }
+    }
+
+    // ---- 5. Mismatch computation (PerfCounterId::MismatchCompute) ----
+    {
+        core::OrderState os{};
+        os.key = 12345;
+        os.seen_internal = true;
+        os.seen_dropcopy = true;
+        os.internal_status = core::OrdStatus::PartiallyFilled;
+        os.dropcopy_status = core::OrdStatus::PartiallyFilled;
+        os.internal_cum_qty = 100;
+        os.dropcopy_cum_qty = 100;
+        os.internal_avg_px = 1000000;
+        os.dropcopy_avg_px = 1000000;
+
+        for (int i = 0; i < ITERATIONS; ++i) {
+            core::MismatchMask mask = core::compute_mismatch(os);
+            (void)mask;
+        }
+    }
+
+    // ---- 6. Full reconciler process_event (PerfCounterId::ReconcilerProcessEvent) ----
+    //         This exercises the entire pipeline: upsert, mismatch, timer wheel, etc.
+    {
+        using ExecRing = ingest::SpscRing<core::ExecEvent, 1u << 16>;
+
+        std::atomic<bool> stop_flag{false};
+        auto primary_ring = std::make_unique<ExecRing>();
+        auto dropcopy_ring = std::make_unique<ExecRing>();
+        auto divergence_ring = std::make_unique<core::DivergenceRing>();
+        auto seq_gap_ring = std::make_unique<core::SequenceGapRing>();
+        util::Arena arena(4ULL * 1024ULL * 1024ULL);
+        core::OrderStateStore store(arena, 2048);
+        core::ReconCounters counters{};
+        util::WheelTimer timer_wheel(0);
+        core::ReconConfig config{};
+
+        core::Reconciler reconciler(
+            stop_flag, *primary_ring, *dropcopy_ring, store, counters,
+            *divergence_ring, *seq_gap_ring, &timer_wheel, config);
+
+        for (int i = 0; i < ITERATIONS; ++i) {
+            core::ExecEvent ev{};
+            ev.source = (i & 1) ? core::Source::DropCopy : core::Source::Primary;
+            ev.seq_num = static_cast<std::uint64_t>(i / 2 + 1);
+            ev.ord_status = core::OrdStatus::New;
+            ev.ingest_tsc = util::rdtsc();
+
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "CID%05d", i / 2);
+            ev.set_clord_id(buf, 8);
+            std::snprintf(buf, sizeof(buf), "EXE%05d", i);
+            ev.set_exec_id(buf, 8);
+
+            reconciler.process_event_for_test(ev);
+        }
+    }
+
+    // ---- Dump all counters ----
+    std::fprintf(stderr,
+        "\n"
+        "============================================================\n"
+        "  FX Reconciler - Full Performance Report  (%d iterations)\n"
+        "============================================================\n",
+        ITERATIONS);
+
+    registry.dump();
+
+    std::fprintf(stderr,
+        "============================================================\n\n");
+
+    // Sanity assertions -- every counter should have been exercised
+    EXPECT_GT(registry.get(util::PerfCounterId::ArenaAllocate).count, 0)
+        << "ArenaAllocate was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::HashTableUpsert).count, 0)
+        << "HashTableUpsert was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::HashTableLookup).count, 0)
+        << "HashTableLookup was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::TimerWheelSchedule).count, 0)
+        << "TimerWheelSchedule was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::TimerWheelPollExpired).count, 0)
+        << "TimerWheelPollExpired was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::SpscRingPush).count, 0)
+        << "SpscRingPush was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::SpscRingPop).count, 0)
+        << "SpscRingPop was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::MismatchCompute).count, 0)
+        << "MismatchCompute was not exercised";
+    EXPECT_GT(registry.get(util::PerfCounterId::ReconcilerProcessEvent).count, 0)
+        << "ReconcilerProcessEvent was not exercised";
 }
 
 #endif // FX_PERF_ENABLED

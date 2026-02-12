@@ -168,7 +168,7 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
 // Mismatch computation for hot path (conditionally instrumented when FX_PERF_ENABLED).
 // No tolerance parameters in this version (tolerance/config comes in FX-7053/FX-7200).
 [[nodiscard]] inline MismatchMask compute_mismatch(const OrderState& os) noexcept {
-    PERF_SCOPE(util::PerfCounterId::MismatchCompute);
+    PERF_SCOPE(::util::PerfCounterId::MismatchCompute);
     
     MismatchMask m{};
 
@@ -225,7 +225,7 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     std::int64_t qty_tolerance,
     std::int64_t px_tolerance
 ) noexcept {
-    PERF_SCOPE(util::PerfCounterId::MismatchCompute);
+    PERF_SCOPE(::util::PerfCounterId::MismatchCompute);
     
     MismatchMask m{};
 
