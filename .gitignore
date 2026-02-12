@@ -17,6 +17,7 @@ test_*.sh
 
 # Benchmark artifacts
 benchmark_results.json
+bench/out/
 
 # Precompiled headers
 *.gch

@@ -37,31 +37,34 @@ static void BM_HashTableLookup_FirstProbe(benchmark::State& state) {
         auto* found = store.find(key);
         benchmark::DoNotOptimize(found);
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_HashTableLookup_FirstProbe);
 
-// Worst case: Maximum probe chain (simulate high collision)
-static void BM_HashTableLookup_MaxProbe(benchmark::State& state) {
+// High load factor: Realistic late probe under heavy load
+static void BM_HashTableLookup_HighLoadFactor(benchmark::State& state) {
     // Use smaller arena (1MB instead of 512MB) to reduce memory pressure
     util::Arena arena(1ULL * 1024ULL * 1024ULL);
-    core::OrderStateStore store(arena, 256);
+    // Small capacity to create high load factor
+    const std::size_t capacity_hint = 128;
+    core::OrderStateStore store(arena, capacity_hint);
 
-    // Create intentional collisions by generating keys that map to the same bucket
-    // Since hash(key) = key, we need keys with the same (key & (bucket_count-1))
+    // Fill to 90% load factor with unique ClOrdIDs
     const std::size_t bucket_count = store.bucket_count();
-    const std::size_t target_bucket = 42;  // Arbitrary bucket to collide in
+    const std::size_t num_entries = static_cast<std::size_t>(bucket_count * 0.90);
     
     std::vector<core::OrderKey> keys;
-    // Insert keys that all map to the same bucket, forcing linear probing
-    for (int i = 0; i < 50; ++i) {
+    keys.reserve(num_entries);
+    
+    for (std::size_t i = 0; i < num_entries; ++i) {
         core::ExecEvent ev{};
         ev.ord_status = core::OrdStatus::New;
         
-        // Generate ClOrdID that will hash to target_bucket
-        // We'll use sequential keys: target_bucket, target_bucket + bucket_count, etc.
+        // Generate unique ClOrdIDs to fill the store
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "KEY%05d", static_cast<int>(target_bucket + i * bucket_count));
-        std::memcpy(ev.clord_id, buf, 8);
+        std::snprintf(buf, sizeof(buf), "ORD%05zu", i);
+        std::memcpy(ev.clord_id, buf, std::min(sizeof(buf), sizeof(ev.clord_id)));
         ev.clord_id_len = 8;
         ev.cum_qty = 0;
         ev.price_micro = 1000000;
@@ -72,15 +75,18 @@ static void BM_HashTableLookup_MaxProbe(benchmark::State& state) {
         }
     }
 
-    // Look up a key that requires maximum probing (last inserted key in the collision chain)
+    // Look up the last inserted key (realistic "late probe" under high load)
     const core::OrderKey target_key = keys.empty() ? 0 : keys.back();
 
     for (auto _ : state) {
         auto* found = store.find(target_key);
         benchmark::DoNotOptimize(found);
     }
+    
+    state.SetItemsProcessed(state.iterations());
+    state.SetLabel("load_factor=90%");
 }
-BENCHMARK(BM_HashTableLookup_MaxProbe);
+BENCHMARK(BM_HashTableLookup_HighLoadFactor);
 
 // ============================================================================
 // Hash Table Upsert Benchmark
@@ -114,6 +120,8 @@ static void BM_HashTableUpsert(benchmark::State& state) {
             state.ResumeTiming();
         }
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_HashTableUpsert);
 
@@ -131,11 +139,16 @@ static void BM_ArenaAllocate(benchmark::State& state) {
         benchmark::DoNotOptimize(ptr);
 
         // Reset arena periodically to avoid exhaustion
+        // Pause timing so reset cost isn't included in measurements
         if (++alloc_count % 10000 == 0) {
+            state.PauseTiming();
             arena.reset();
             alloc_count = 0;
+            state.ResumeTiming();
         }
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_ArenaAllocate);
 
@@ -171,6 +184,8 @@ static void BM_TimerWheelSchedule(benchmark::State& state) {
             state.ResumeTiming();
         }
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_TimerWheelSchedule);
 
@@ -194,6 +209,8 @@ static void BM_ComputeMismatch(benchmark::State& state) {
         core::MismatchMask mask = core::compute_mismatch(os);
         benchmark::DoNotOptimize(mask);
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_ComputeMismatch);
 
@@ -224,6 +241,8 @@ static void BM_SPSCRing_Push(benchmark::State& state) {
             state.ResumeTiming();
         }
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_SPSCRing_Push);
 
@@ -256,6 +275,8 @@ static void BM_SPSCRing_Pop(benchmark::State& state) {
             state.ResumeTiming();
         }
     }
+    
+    state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_SPSCRing_Pop);
 
@@ -273,5 +294,8 @@ static void BM_SPSCRing_PushPop(benchmark::State& state) {
         benchmark::DoNotOptimize(popped);
         benchmark::DoNotOptimize(out);
     }
+    
+    // Two operations per iteration (push + pop)
+    state.SetItemsProcessed(state.iterations() * 2);
 }
 BENCHMARK(BM_SPSCRing_PushPop);

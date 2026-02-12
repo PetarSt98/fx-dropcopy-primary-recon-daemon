@@ -11,6 +11,9 @@ if [ ! -f ./build-release/reconciler_bench ]; then
     exit 1
 fi
 
+# Create output directory for benchmark results
+mkdir -p bench/out
+
 echo "=========================================="
 echo "FX Reconciliation Microbenchmarks"
 echo "=========================================="
@@ -22,10 +25,34 @@ echo ""
 echo "=========================================="
 echo ""
 
+# Run benchmarks and save JSON output to bench/out/
 ./build-release/reconciler_bench \
     --benchmark_repetitions=5 \
     --benchmark_report_aggregates_only=true \
     --benchmark_display_aggregates_only=true \
     --benchmark_counters_tabular=true \
-    --benchmark_out=benchmark_results.json \
+    --benchmark_out=bench/out/benchmark_results.json \
     --benchmark_out_format=json
+
+echo ""
+echo "=========================================="
+echo "Generating Markdown Table"
+echo "=========================================="
+echo ""
+
+# Generate markdown table from JSON results
+if command -v python3 &> /dev/null; then
+    python3 scripts/format_benchmark_results.py bench/out/benchmark_results.json bench/out/benchmark_results.md
+    echo ""
+    echo "Results saved to:"
+    echo "  - JSON: bench/out/benchmark_results.json"
+    echo "  - Markdown: bench/out/benchmark_results.md"
+    echo ""
+    echo "Markdown table preview:"
+    echo ""
+    cat bench/out/benchmark_results.md
+else
+    echo "Warning: python3 not found, skipping markdown generation"
+    echo "JSON results saved to: bench/out/benchmark_results.json"
+fi
+

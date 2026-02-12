@@ -11,6 +11,13 @@ option(FX_PERF_ENABLED "Enable performance instrumentation" OFF)
 # Benchmarks option (default: OFF to avoid pulling Google Benchmark dependency)
 option(FX_BUILD_BENCHMARKS "Build Google Benchmark microbenchmarks" OFF)
 
+# Guard against perf instrumentation pollution in benchmarks
+if(FX_BUILD_BENCHMARKS AND FX_PERF_ENABLED)
+  message(WARNING "FX_PERF_ENABLED is ON with FX_BUILD_BENCHMARKS=ON. "
+                  "Performance instrumentation overhead will distort benchmark measurements. "
+                  "Recommend building benchmarks with -DFX_PERF_ENABLED=OFF for accurate results.")
+endif()
+
 if(MSVC)
   add_compile_options(/W4 /permissive-)
 else()
@@ -300,8 +307,11 @@ gtest_discover_tests(recon_determinism_tests
   DISCOVERY_MODE PRE_TEST
 )
 
-add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
-target_link_libraries(benchmarks PRIVATE fx_core)
+# Legacy benchmarks target (opt-in via FX_BUILD_BENCHMARKS option)
+if(FX_BUILD_BENCHMARKS)
+  add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
+  target_link_libraries(benchmarks PRIVATE fx_core)
+endif()
 
 # Benchmark target (opt-in via FX_BUILD_BENCHMARKS option)
 if(FX_BUILD_BENCHMARKS)
