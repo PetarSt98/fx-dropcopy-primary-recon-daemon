@@ -3,6 +3,9 @@
 #include <thread>
 
 #include "util/rdtsc.hpp"
+#include "util/perf_macros.hpp"
+
+PERF_DECLARE_COUNTER(aeron_ingest, "aeron.ingest_fragment");
 
 namespace ingest {
 
@@ -58,6 +61,7 @@ void AeronSubscriber::run() {
                        aeron::util::index_t offset,
                        aeron::util::index_t length,
                        const concurrent::logbuffer::Header&) {
+        PERF_BEGIN(aeron_ingest);
         if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
             ++stats_.parse_failures;
             return;
@@ -70,6 +74,7 @@ void AeronSubscriber::run() {
         } else {
             ++stats_.produced;
         }
+        PERF_END(aeron_ingest);
     };
 
     int idle_count = 0;
