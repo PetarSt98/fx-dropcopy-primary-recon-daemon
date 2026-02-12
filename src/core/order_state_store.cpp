@@ -4,6 +4,11 @@
 #include <limits>
 #include <stdexcept>
 
+#include "util/perf_macros.hpp"
+
+PERF_DECLARE_COUNTER(store_upsert, "store.upsert");
+PERF_DECLARE_COUNTER(store_find, "store.find");
+
 namespace core {
 
 namespace {
@@ -49,6 +54,7 @@ OrderStateStore::OrderStateStore(util::Arena& arena, std::size_t capacity_hint)
 }
 
 OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
+    PERF_SCOPED(store_upsert);
     const OrderKey key = make_order_key(ev);
     if (key == empty_key_) {
         ++overflow_count_;
@@ -82,6 +88,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
 }
 
 OrderState* OrderStateStore::find(OrderKey key) noexcept {
+    PERF_SCOPED(store_find);
     if (key == empty_key_) {
         return nullptr;
     }

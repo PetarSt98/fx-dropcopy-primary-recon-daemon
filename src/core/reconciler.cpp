@@ -8,6 +8,10 @@
 #include "util/async_log.hpp"
 #include "util/rdtsc.hpp"
 #include "util/tsc_calibration.hpp"
+#include "util/perf_macros.hpp"
+
+PERF_DECLARE_COUNTER(recon_event, "recon.process_event");
+PERF_DECLARE_COUNTER(timer_poll, "timer.poll_expired");
 
 // CPU pause intrinsics for HFT busy-wait loops
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
@@ -83,6 +87,7 @@ void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
 }
 
 void Reconciler::process_event(const ExecEvent& ev) noexcept {
+    PERF_SCOPED(recon_event);
     // === Sequence tracking (unchanged) ===
     SequenceGapEvent gap_ev{};
     SequenceGapEvent* gap_ptr = &gap_ev;
@@ -238,9 +243,11 @@ void Reconciler::run() {
         // (using stale last_poll_tsc_ could cause timers to be skipped)
         const std::uint64_t now = util::rdtsc();
         if (timer_wheel_) {
+            PERF_BEGIN(timer_poll);
             timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
                 on_grace_deadline_expired(key, gen);
             });
+            PERF_END(timer_poll);
         }
         
         // FX-7054: Periodic gap timeout check (not in hot path - once per second)
