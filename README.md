@@ -410,3 +410,18 @@ docker compose run --rm --profile test integration-tests
 The `integration-tests` service starts an embedded Aeron media driver and
 launches the recon daemon and publishers inside the container, then verifies
 the “Reconciler consumed” counters in the recon logs.
+
+**Soak/Load Testing**
+
+For production-grade stability validation, see the [Soak Test Guide](docs/soak_test.md):
+
+```bash
+# 24-hour stability test at 10k orders/sec
+./scripts/soak_test.sh 24 10000
+
+# Analyze results
+python3 scripts/analyze_soak_test.py soak_logs/soak_metrics.csv
+```
+
+The soak test suite validates memory stability, CPU usage, and throughput under
+sustained high-load conditions.
