@@ -8,6 +8,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Performance instrumentation option (default: OFF for zero overhead)
 option(FX_PERF_ENABLED "Enable performance instrumentation" OFF)
 
+# Benchmarks option (default: OFF to avoid pulling Google Benchmark dependency)
+option(FX_BUILD_BENCHMARKS "Build Google Benchmark microbenchmarks" OFF)
+
+# Guard against perf instrumentation pollution in benchmarks
+if(FX_BUILD_BENCHMARKS AND FX_PERF_ENABLED)
+  message(WARNING "FX_PERF_ENABLED is ON with FX_BUILD_BENCHMARKS=ON. "
+                  "Performance instrumentation overhead will distort benchmark measurements. "
+                  "Recommend building benchmarks with -DFX_PERF_ENABLED=OFF for accurate results.")
+endif()
+
 if(MSVC)
   add_compile_options(/W4 /permissive-)
 else()
@@ -34,6 +44,20 @@ FetchContent_Declare(
   URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
 )
 FetchContent_MakeAvailable(googletest)
+
+# Only fetch Google Benchmark if benchmarks are enabled
+if(FX_BUILD_BENCHMARKS)
+  message(STATUS "Google Benchmark: ENABLED")
+  FetchContent_Declare(
+      benchmark
+      GIT_REPOSITORY https://github.com/google/benchmark.git
+      GIT_TAG v1.8.3
+  )
+  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(benchmark)
+else()
+  message(STATUS "Google Benchmark: DISABLED (use -DFX_BUILD_BENCHMARKS=ON to enable)")
+endif()
 
 add_library(fx_core
     src/ingest/spsc_ring.hpp
@@ -283,5 +307,24 @@ gtest_discover_tests(recon_determinism_tests
   DISCOVERY_MODE PRE_TEST
 )
 
-add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
-target_link_libraries(benchmarks PRIVATE fx_core)
+# Legacy benchmarks target (opt-in via FX_BUILD_BENCHMARKS option)
+if(FX_BUILD_BENCHMARKS)
+  add_executable(benchmarks bench/bench_main.cpp src/ingest/fix_parser.cpp src/core/reconciler.cpp)
+  target_link_libraries(benchmarks PRIVATE fx_core)
+endif()
+
+# Benchmark target (opt-in via FX_BUILD_BENCHMARKS option)
+if(FX_BUILD_BENCHMARKS)
+  add_executable(reconciler_bench
+      bench/reconciler_bench.cpp
+  )
+  target_link_libraries(reconciler_bench PRIVATE
+      fx_core
+      benchmark::benchmark
+      benchmark::benchmark_main
+  )
+  target_include_directories(reconciler_bench PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests
+  )
+endif()
