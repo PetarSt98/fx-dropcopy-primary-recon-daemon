@@ -89,7 +89,7 @@ public:
     // on the next poll_expired() call.
     [[nodiscard]] bool schedule(core::OrderKey key, std::uint32_t generation,
                                 std::uint64_t deadline_tsc) noexcept {
-        PERF_SCOPE(util::PerfCounterId::TimerWheelSchedule);
+        PERF_SCOPE(::util::PerfCounterId::TimerWheelSchedule);
         
         ++stats_.scheduled;
 
@@ -125,7 +125,7 @@ public:
     // Complexity: O(number of expired entries), NOT O(total scheduled)
     template <typename F>
     void poll_expired(std::uint64_t now_tsc, F&& on_expired) noexcept {
-        PERF_SCOPE(util::PerfCounterId::TimerWheelPollExpired);
+        PERF_SCOPE(::util::PerfCounterId::TimerWheelPollExpired);
         
         const std::uint64_t now_tick = now_tsc / tick_tsc_;
 

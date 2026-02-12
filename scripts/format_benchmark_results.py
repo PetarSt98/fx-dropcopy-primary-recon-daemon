@@ -20,33 +20,48 @@ def format_time(ns):
         return f"{ns / 1000000000:.2f} s"
 
 
+def _to_ns(value: float, unit: str) -> float:
+    mult = {"ns": 1.0, "us": 1_000.0, "ms": 1_000_000.0, "s": 1_000_000_000.0}
+    return float(value) * mult.get(unit, 1.0)
+
+
 def parse_benchmark_json(json_path):
-    """Parse benchmark JSON and extract results."""
-    with open(json_path, 'r') as f:
+    """Parse benchmark JSON and extract aggregate results."""
+    with open(json_path, "r") as f:
         data = json.load(f)
-    
-    benchmarks = []
-    for bench in data.get('benchmarks', []):
-        name = bench.get('name', '')
-        # Only include aggregate results (mean, median, stddev)
-        if '_mean' in name or '_median' in name or '_cv' in name:
-            # Skip cv (coefficient of variation) for the table
-            if '_cv' in name:
-                continue
-            
-            base_name = name.replace('_mean', '').replace('_median', '').replace('_stddev', '')
-            time_ns = bench.get('real_time', bench.get('cpu_time', 0))
-            aggregate_type = bench.get('aggregate_name', '')
-            
-            # Find or create benchmark entry
-            bench_entry = next((b for b in benchmarks if b['name'] == base_name), None)
-            if not bench_entry:
-                bench_entry = {'name': base_name, 'label': bench.get('label', '')}
-                benchmarks.append(bench_entry)
-            
-            bench_entry[aggregate_type] = time_ns
-    
-    return benchmarks
+
+    by_name = {}  # base_name -> dict
+
+    for bench in data.get("benchmarks", []):
+        # Prefer explicit aggregate rows (more reliable than name suffix matching)
+        if bench.get("run_type") != "aggregate":
+            continue
+
+        agg = bench.get("aggregate_name", "")
+        if agg not in ("mean", "median", "stddev"):  # skip cv by default
+            continue
+
+        name = bench.get("name", "")
+        base_name = (
+            name.replace("_mean", "")
+                .replace("_median", "")
+                .replace("_stddev", "")
+                .replace("_cv", "")
+        )
+
+        unit = bench.get("time_unit", "ns")
+        time_val = bench.get("real_time", bench.get("cpu_time", 0))
+        time_ns = _to_ns(time_val, unit)
+
+        entry = by_name.get(base_name)
+        if entry is None:
+            entry = {"name": base_name, "label": bench.get("label", "")}
+            by_name[base_name] = entry
+
+        entry[agg] = time_ns
+
+    # Preserve deterministic ordering (alphabetical). If you prefer insertion order, remove sorted().
+    return [by_name[k] for k in sorted(by_name.keys())]
 
 
 def generate_markdown_table(benchmarks):
