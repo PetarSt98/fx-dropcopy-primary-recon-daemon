@@ -1,5 +1,9 @@
 #include <benchmark/benchmark.h>
 
+#include <vector>
+#include <cstdio>
+#include <cstring>
+
 #include "core/order_state.hpp"
 #include "core/order_state_store.hpp"
 #include "ingest/spsc_ring.hpp"
@@ -13,7 +17,8 @@
 
 // Best case: First probe (key in first slot)
 static void BM_HashTableLookup_FirstProbe(benchmark::State& state) {
-    util::Arena arena(util::Arena::default_capacity_bytes);
+    // Use smaller arena (1MB instead of 512MB) to reduce memory pressure
+    util::Arena arena(1ULL * 1024ULL * 1024ULL);
     core::OrderStateStore store(arena, 1024);
 
     // Insert a single order to ensure first-probe hit
@@ -37,17 +42,25 @@ BENCHMARK(BM_HashTableLookup_FirstProbe);
 
 // Worst case: Maximum probe chain (simulate high collision)
 static void BM_HashTableLookup_MaxProbe(benchmark::State& state) {
-    util::Arena arena(util::Arena::default_capacity_bytes);
+    // Use smaller arena (1MB instead of 512MB) to reduce memory pressure
+    util::Arena arena(1ULL * 1024ULL * 1024ULL);
     core::OrderStateStore store(arena, 256);
 
-    // Create collision chain by inserting keys that hash to similar buckets
-    // We'll insert enough keys to create probing scenarios
+    // Create intentional collisions by generating keys that map to the same bucket
+    // Since hash(key) = key, we need keys with the same (key & (bucket_count-1))
+    const std::size_t bucket_count = store.bucket_count();
+    const std::size_t target_bucket = 42;  // Arbitrary bucket to collide in
+    
     std::vector<core::OrderKey> keys;
-    for (int i = 0; i < 200; ++i) {
+    // Insert keys that all map to the same bucket, forcing linear probing
+    for (int i = 0; i < 50; ++i) {
         core::ExecEvent ev{};
         ev.ord_status = core::OrdStatus::New;
+        
+        // Generate ClOrdID that will hash to target_bucket
+        // We'll use sequential keys: target_bucket, target_bucket + bucket_count, etc.
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "ORD%05d", i);
+        std::snprintf(buf, sizeof(buf), "KEY%05d", static_cast<int>(target_bucket + i * bucket_count));
         std::memcpy(ev.clord_id, buf, 8);
         ev.clord_id_len = 8;
         ev.cum_qty = 0;
@@ -59,7 +72,7 @@ static void BM_HashTableLookup_MaxProbe(benchmark::State& state) {
         }
     }
 
-    // Look up a key that requires maximum probing (last inserted key)
+    // Look up a key that requires maximum probing (last inserted key in the collision chain)
     const core::OrderKey target_key = keys.empty() ? 0 : keys.back();
 
     for (auto _ : state) {
@@ -74,7 +87,8 @@ BENCHMARK(BM_HashTableLookup_MaxProbe);
 // ============================================================================
 
 static void BM_HashTableUpsert(benchmark::State& state) {
-    util::Arena arena(util::Arena::default_capacity_bytes);
+    // Use smaller arena (2MB instead of 512MB) to reduce memory pressure
+    util::Arena arena(2ULL * 1024ULL * 1024ULL);
     core::OrderStateStore store(arena, 2048);
 
     int counter = 0;
@@ -92,9 +106,12 @@ static void BM_HashTableUpsert(benchmark::State& state) {
         benchmark::DoNotOptimize(os);
 
         // Reset arena periodically to avoid overflow
+        // Pause timing so reset cost isn't included in measurements
         if (counter % 1000 == 0) {
+            state.PauseTiming();
             store.reset_epoch();
             counter = 0;
+            state.ResumeTiming();
         }
     }
 }
@@ -105,7 +122,8 @@ BENCHMARK(BM_HashTableUpsert);
 // ============================================================================
 
 static void BM_ArenaAllocate(benchmark::State& state) {
-    util::Arena arena(util::Arena::default_capacity_bytes);
+    // Use smaller arena (1MB instead of 512MB) to reduce memory pressure
+    util::Arena arena(1ULL * 1024ULL * 1024ULL);
     int alloc_count = 0;
 
     for (auto _ : state) {
@@ -130,19 +148,27 @@ static void BM_TimerWheelSchedule(benchmark::State& state) {
 
     core::OrderKey key = 12345;
     std::uint32_t generation = 0;
-    std::uint64_t base_deadline_tsc = 1000000;
+    
+    // Use proper TSC-based stride to distribute entries across buckets
+    const std::uint64_t tick_tsc = timer.tick_tsc();
+    std::uint64_t base_deadline_tsc = tick_tsc;
 
     int counter = 0;
     for (auto _ : state) {
-        std::uint64_t deadline = base_deadline_tsc + counter * 1000;
+        // Schedule with deadlines spaced by tick_tsc to avoid bucket overflow
+        std::uint64_t deadline = base_deadline_tsc + static_cast<std::uint64_t>(counter) * tick_tsc;
         bool scheduled = timer.schedule(key + counter, generation, deadline);
         benchmark::DoNotOptimize(scheduled);
         ++counter;
 
         // Reset timer periodically to avoid bucket overflow
+        // Pause timing so reset cost isn't included in measurements
         if (counter % 5000 == 0) {
+            state.PauseTiming();
             timer.reset(0);
             counter = 0;
+            base_deadline_tsc = tick_tsc;
+            state.ResumeTiming();
         }
     }
 }
@@ -187,13 +213,15 @@ static void BM_SPSCRing_Push(benchmark::State& state) {
         bool pushed = ring.try_push(evt);
         benchmark::DoNotOptimize(pushed);
 
-        // Pop periodically to avoid filling the ring
+        // Pop periodically to avoid filling the ring, but do not time the pops
         if (++push_count % 1000 == 0) {
+            state.PauseTiming();
             core::ExecEvent dummy;
             for (int i = 0; i < 1000; ++i) {
                 ring.try_pop(dummy);
             }
             push_count = 0;
+            state.ResumeTiming();
         }
     }
 }
@@ -218,12 +246,14 @@ static void BM_SPSCRing_Pop(benchmark::State& state) {
         benchmark::DoNotOptimize(popped);
         benchmark::DoNotOptimize(out);
 
-        // Refill periodically to avoid emptying
+        // Refill periodically to avoid emptying, but do not include refill in timing
         if (++refill_counter % 1000 == 0) {
+            state.PauseTiming();
             for (int i = 0; i < 1000; ++i) {
                 ring.try_push(evt);
             }
             refill_counter = 0;
+            state.ResumeTiming();
         }
     }
 }
