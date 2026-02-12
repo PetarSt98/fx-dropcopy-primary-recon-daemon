@@ -15,8 +15,7 @@ namespace {
 
 class PerfCounterRegistryTest : public ::testing::Test {
 protected:
-    // Use a local instance rather than the singleton to avoid cross-test pollution.
-    // The singleton is tested separately.
+    // Uses the singleton with reset_all() for test isolation.
     util::PerfCounterRegistry& reg_ = util::PerfCounterRegistry::instance();
 
     void SetUp() override {

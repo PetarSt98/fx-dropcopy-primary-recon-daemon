@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 namespace util {
 
@@ -161,7 +164,12 @@ public:
         }
         // Log2 region: find the highest set bit position
         // For ns in [1024, 2^32), log2_group = floor(log2(ns)) - 10
+#if defined(_MSC_VER)
+        unsigned long bits = 0;
+        _BitScanReverse64(&bits, ns | 1);
+#else
         const unsigned bits = 63 - static_cast<unsigned>(__builtin_clzll(ns | 1));
+#endif
         const unsigned log2_group = bits - 10;  // subtract linear region bits
         const std::size_t idx = LINEAR_BUCKETS + log2_group;
         return idx < TOTAL_BUCKETS ? idx : TOTAL_BUCKETS - 1;
