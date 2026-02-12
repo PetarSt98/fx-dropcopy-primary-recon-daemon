@@ -13,3 +13,7 @@ _codeql_build_dir/
 # Temporary files
 *.log
 test_*.sh
+
+# Precompiled headers
+*.gch
+*.pch
