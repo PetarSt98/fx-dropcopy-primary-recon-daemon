@@ -20,8 +20,10 @@ set -euo pipefail
 # Configuration & Defaults
 # ============================================================================
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_ROOT
 readonly BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/build/release}"
 
 # Test parameters
@@ -175,6 +177,9 @@ launch_media_driver() {
     log "Launching Aeron MediaDriver"
     
     mkdir -p "${AERON_DIR}"
+    
+    # Export AERON_DIR for child processes
+    export AERON_DIR
     
     # Launch aeronmd in background
     "${AERONMD}" \
