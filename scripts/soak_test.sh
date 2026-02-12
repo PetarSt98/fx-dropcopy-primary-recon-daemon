@@ -167,15 +167,19 @@ get_recond_counters() {
     local internal
     local dropcopy
     
-    # Get the last reported counters from the tail of the log to avoid
-    # repeatedly scanning the entire file and to remain portable (no grep -P).
+    # Tail the last 2000 lines of the log to avoid repeatedly scanning the
+    # entire file (which grows over 24h) and to remain portable (no grep -P).
+    # 2000 lines is sufficient since counters are logged periodically.
+    local -r LOG_TAIL_LINES=2000
+    
+    # Get the last reported counters from the tail of the log
     internal=$(
-        tail -n 2000 "${RECOND_LOG}" 2>/dev/null \
+        tail -n "${LOG_TAIL_LINES}" "${RECOND_LOG}" 2>/dev/null \
             | sed -n 's/.*internal=\([0-9][0-9]*\).*/\1/p' \
             | tail -n 1
     )
     dropcopy=$(
-        tail -n 2000 "${RECOND_LOG}" 2>/dev/null \
+        tail -n "${LOG_TAIL_LINES}" "${RECOND_LOG}" 2>/dev/null \
             | sed -n 's/.*dropcopy=\([0-9][0-9]*\).*/\1/p' \
             | tail -n 1
     )
@@ -279,7 +283,6 @@ launch_publisher() {
     if [[ "${ORDERS_PER_SEC}" -lt 1000 ]]; then
         sleep_ms=$((1000 / ORDERS_PER_SEC))
     else
-        sleep_ms=0
         log "ORDERS_PER_SEC=${ORDERS_PER_SEC} >= 1000: running publisher in unthrottled max-throughput mode (actual send rate may exceed requested rate)."
     fi
     
