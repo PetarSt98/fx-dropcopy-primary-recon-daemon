@@ -37,7 +37,7 @@ private:
 // Usage: PERF_SCOPE(PerfCounterId::ReconcilerProcessEvent);
 // Uses __COUNTER__ to ensure unique variable names even on the same line
 #define PERF_SCOPE(counter_id) \
-    ::util::PerfScopeGuard PERF_CONCAT(_perf_guard_, __COUNTER__)(counter_id)
+    [[maybe_unused]] ::util::PerfScopeGuard PERF_CONCAT(_perf_guard_, __COUNTER__)(counter_id)
 
 // Macro: Manual start timing
 // Usage: PERF_START(my_timer);

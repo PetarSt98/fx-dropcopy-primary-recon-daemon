@@ -5,6 +5,7 @@
 #include <array>
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 
 namespace util {
 
@@ -18,7 +19,7 @@ namespace util {
 // - Single-writer assumption (reconciler thread only)
 //
 // Template parameters:
-// - NumBuckets: Number of histogram buckets (must be power of 2 for efficient division)
+// - NumBuckets: Number of histogram buckets (any positive value; power-of-2 not required)
 // - MaxValueNs: Maximum value in nanoseconds (values above go to overflow bucket)
 //
 // Usage:
@@ -72,13 +73,18 @@ public:
     [[nodiscard]] std::uint64_t percentile(double p) const noexcept {
         if (count_ == 0) return 0;
         
-        const std::uint64_t target_count = static_cast<std::uint64_t>(p * count_);
+        // Clamp p to [0, 1] and compute 1-based rank (minimum of 1)
+        // This ensures correct behavior for small sample sizes and edge cases
+        const double clamped_p = (p < 0.0) ? 0.0 : (p > 1.0) ? 1.0 : p;
+        const std::uint64_t target_rank = std::max<std::uint64_t>(1, 
+            static_cast<std::uint64_t>(std::ceil(clamped_p * count_)));
+        
         std::uint64_t cumulative = 0;
         
         // Scan buckets to find target percentile
         for (std::size_t i = 0; i <= NumBuckets; ++i) {
             cumulative += buckets_[i];
-            if (cumulative >= target_count) {
+            if (cumulative >= target_rank) {
                 // Return the upper bound of this bucket
                 if (i == NumBuckets) {
                     // Overflow bucket - return max observed value
@@ -110,18 +116,18 @@ public:
         return count_ > 0 ? sum_ / count_ : 0;
     }
 
-    // Print formatted report
+    // Print formatted report to stderr (consistent with PerfRegistry::dump())
     void print_report(const char* label) const noexcept {
         if (count_ == 0) {
-            std::printf("=== %s ===\nNo samples\n", label);
+            std::fprintf(stderr, "=== %s ===\nNo samples\n", label);
             return;
         }
         
-        std::printf("=== %s ===\n", label);
-        std::printf("P50: %lu ns | P99: %lu ns | P99.9: %lu ns\n",
-                   static_cast<unsigned long>(percentile(0.50)),
-                   static_cast<unsigned long>(percentile(0.99)),
-                   static_cast<unsigned long>(percentile(0.999)));
+        std::fprintf(stderr, "=== %s ===\n", label);
+        std::fprintf(stderr, "P50: %lu ns | P99: %lu ns | P99.9: %lu ns\n",
+                    static_cast<unsigned long>(percentile(0.50)),
+                    static_cast<unsigned long>(percentile(0.99)),
+                    static_cast<unsigned long>(percentile(0.999)));
     }
 
 private:
