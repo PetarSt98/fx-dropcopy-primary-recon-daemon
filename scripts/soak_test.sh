@@ -116,7 +116,13 @@ cleanup() {
     done
     
     # Clean up Aeron directory
-    if [[ -d "${AERON_DIR}" ]]; then
+    if [[ -z "${AERON_DIR}" ]]; then
+        log "Refusing to remove Aeron directory: AERON_DIR is empty"
+    elif [[ "${AERON_DIR}" != /var/tmp/aeron-soak-* ]]; then
+        log "Refusing to remove suspicious Aeron directory (unexpected path): ${AERON_DIR}"
+    elif [[ ! -f "${AERON_DIR}/cnc.dat" ]]; then
+        log "Refusing to remove Aeron directory without cnc.dat: ${AERON_DIR}"
+    else
         log "Removing Aeron directory: ${AERON_DIR}"
         rm -rf "${AERON_DIR}"
     fi
@@ -161,9 +167,26 @@ get_recond_counters() {
     local internal
     local dropcopy
     
-    # Get the last reported counters
-    internal=$(grep -oP 'internal=\K[0-9]+' "${RECOND_LOG}" 2>/dev/null | tail -1 || echo "0")
-    dropcopy=$(grep -oP 'dropcopy=\K[0-9]+' "${RECOND_LOG}" 2>/dev/null | tail -1 || echo "0")
+    # Get the last reported counters from the tail of the log to avoid
+    # repeatedly scanning the entire file and to remain portable (no grep -P).
+    internal=$(
+        tail -n 2000 "${RECOND_LOG}" 2>/dev/null \
+            | sed -n 's/.*internal=\([0-9][0-9]*\).*/\1/p' \
+            | tail -n 1
+    )
+    dropcopy=$(
+        tail -n 2000 "${RECOND_LOG}" 2>/dev/null \
+            | sed -n 's/.*dropcopy=\([0-9][0-9]*\).*/\1/p' \
+            | tail -n 1
+    )
+    
+    # Default to 0 if no counters have been seen yet
+    if [[ -z "${internal}" ]]; then
+        internal=0
+    fi
+    if [[ -z "${dropcopy}" ]]; then
+        dropcopy=0
+    fi
     
     total=$((internal + dropcopy))
     echo "${total}"
@@ -190,16 +213,23 @@ launch_media_driver() {
     MEDIA_DRIVER_PID=$!
     log "MediaDriver started (PID ${MEDIA_DRIVER_PID})"
     
-    # Wait for cnc.dat to appear
+    # Wait for cnc.dat to appear (timeout in seconds)
     local timeout=10
-    local elapsed=0
-    while [[ $elapsed -lt $timeout ]]; do
+    local start_time
+    start_time=$(date +%s)
+    while :; do
         if [[ -f "${AERON_DIR}/cnc.dat" ]]; then
             log "MediaDriver ready (cnc.dat found)"
             return 0
         fi
+        
+        local now
+        now=$(date +%s)
+        if (( now - start_time >= timeout )); then
+            break
+        fi
+        
         sleep 0.5
-        elapsed=$((elapsed + 1))
     done
     
     error "MediaDriver failed to start (cnc.dat not found)"
@@ -237,17 +267,25 @@ launch_publisher() {
     
     log "Launching ${name} publisher"
     
-    # Calculate sleep_ms to achieve desired rate
-    # The publisher sleeps sleep_ms after each event
-    # For rates >= 1000/sec, use 0ms (busy loop with yield on backpressure)
+    # Calculate sleep_ms to achieve desired rate for moderate/low loads.
+    # The publisher sleeps sleep_ms after each event.
     # For rates < 1000/sec, calculate sleep_ms = 1000ms / rate
-    # Example: 100 orders/sec -> 10ms sleep per event
+    #   Example: 100 orders/sec -> 10ms sleep per event
+    # For rates >= 1000/sec, we deliberately set sleep_ms=0, which instructs
+    # fx_aeron_publisher to run unthrottled (aside from backpressure). In this
+    # regime, ORDERS_PER_SEC is used to size total_events, but the *actual*
+    # send rate is "max throughput" and may exceed the requested rate.
     local sleep_ms=0
     if [[ "${ORDERS_PER_SEC}" -lt 1000 ]]; then
         sleep_ms=$((1000 / ORDERS_PER_SEC))
+    else
+        sleep_ms=0
+        log "ORDERS_PER_SEC=${ORDERS_PER_SEC} >= 1000: running publisher in unthrottled max-throughput mode (actual send rate may exceed requested rate)."
     fi
     
-    # Run indefinitely by setting very large count
+    # Calculate total events for this publisher
+    # Note: Each publisher runs independently, so with two publishers
+    # the reconciler will see approximately 2x the requested ORDERS_PER_SEC
     local duration_sec
     duration_sec=$(bc <<< "${DURATION_HOURS} * 3600" | cut -d. -f1)
     local total_events=$((ORDERS_PER_SEC * duration_sec))
@@ -287,12 +325,6 @@ monitor_processes() {
         now=$(date +%s)
         local elapsed=$((now - start_time))
         
-        # Check if test duration elapsed
-        if [[ $now -ge $end_time ]]; then
-            log "Test duration reached (${elapsed} seconds)"
-            break
-        fi
-        
         # Check if critical processes are still running
         if ! kill -0 "${RECOND_PID}" 2>/dev/null; then
             error "Reconciler process died unexpectedly"
@@ -321,6 +353,12 @@ monitor_processes() {
             local hours_elapsed
             hours_elapsed=$(bc <<< "scale=2; ${elapsed} / 3600")
             log "Progress: ${hours_elapsed}h elapsed | RSS: ${recond_rss} MB | CPU: ${recond_cpu}% | Events: ${events_total}"
+        fi
+        
+        # Check if test duration elapsed (after collecting metrics)
+        if [[ $now -ge $end_time ]]; then
+            log "Test duration reached (${elapsed} seconds)"
+            break
         fi
         
         sleep "${MONITOR_INTERVAL}"
@@ -375,6 +413,19 @@ main() {
     
     if ! command -v "${AERONMD}" &> /dev/null; then
         error "aeronmd not found in PATH"
+    fi
+    
+    # Validate required tools
+    if ! command -v bc &> /dev/null; then
+        error "bc not found in PATH (required for duration calculations)"
+    fi
+    
+    if ! command -v ps &> /dev/null; then
+        error "ps not found in PATH (required for CPU metrics)"
+    fi
+    
+    if [[ ! -d /proc ]]; then
+        error "/proc filesystem not available (required for RSS metrics)"
     fi
     
     # Create log directory

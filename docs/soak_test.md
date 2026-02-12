@@ -157,7 +157,7 @@ A successful soak test must meet:
 
 1. **Stability**: No process crashes or OOM for full duration
 2. **Memory**: Memory growth < 50 MB over test duration
-3. **Data Integrity**: No event drops (counters match published events)
+3. **Data Integrity**: Reconciler counters indicate processing (note: full published-vs-processed reconciliation not yet implemented)
 4. **Performance**: Sustained throughput at target rate
 
 ## Troubleshooting
@@ -212,9 +212,11 @@ If CPU usage exceeds expectations:
 
 ### Rate Control
 
-The publisher rate is controlled by:
-- For rates < 1000/sec: `sleep_ms = 1000 / rate` per event
-- For rates ≥ 1000/sec: `sleep_ms = 0` (busy loop with yield)
+The publisher rate is configured via the `sleep_ms` delay used by `fx_aeron_publisher`:
+- For rates < 1000/sec: `sleep_ms = 1000 / rate` milliseconds per successful event (the publisher sleeps this long after each send)
+- For rates ≥ 1000/sec: `sleep_ms = 0` (no sleep between sends; the publisher runs as fast as possible and is effectively unthrottled)
+
+Note: With two publishers, the reconciler will see approximately 2× the configured rate.
 
 The effective rate may vary based on:
 - Network latency (UDP transport)

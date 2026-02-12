@@ -90,7 +90,7 @@ def analyze_memory(df: pd.DataFrame, leak_threshold: float) -> Tuple[int, int, i
     max_mb = int(df["recond_rss_mb"].max())
     leak_mb = final_mb - initial_mb
     
-    status = "PASS" if abs(leak_mb) < leak_threshold else "FAIL"
+    status = "PASS" if leak_mb < leak_threshold else "FAIL"
     
     return initial_mb, final_mb, max_mb, leak_mb, status
 
@@ -149,7 +149,7 @@ def print_report(
     
     print()
     print("=" * 60)
-    print("24-Hour Soak Test Analysis")
+    print(f"Soak Test Analysis (duration: {duration_hours:.1f} hours)")
     print("=" * 60)
     print()
     
