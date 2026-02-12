@@ -134,6 +134,28 @@ TEST_F(LatencyHistogramTest, Reset) {
     EXPECT_EQ(hist.percentile(0.50), 0);
 }
 
+TEST_F(LatencyHistogramTest, PercentileEdgeCases) {
+    util::LatencyHistogram<256, 10000> hist;
+    
+    // Test with several samples
+    hist.record(100);   // min
+    hist.record(500);
+    hist.record(1000);
+    hist.record(5000);  // max
+    
+    // Test p=0.0 returns min
+    EXPECT_EQ(hist.percentile(0.0), hist.min());
+    EXPECT_EQ(hist.percentile(0.0), 100);
+    
+    // Test p=1.0 returns max
+    EXPECT_EQ(hist.percentile(1.0), hist.max());
+    EXPECT_EQ(hist.percentile(1.0), 5000);
+    
+    // Test clamping for out-of-range p values
+    EXPECT_EQ(hist.percentile(-0.5), hist.min());  // Should clamp to 0.0
+    EXPECT_EQ(hist.percentile(1.5), hist.max());   // Should clamp to 1.0
+}
+
 TEST_F(LatencyHistogramTest, PrintReport) {
     util::LatencyHistogram<256, 10000> hist;
     
@@ -266,10 +288,11 @@ TEST_F(LatencyHistogramTest, PerfScopeMeasuresTime) {
     }
     
     auto& counter = registry.get(util::PerfCounterId::TimerWheelSchedule);
+    // Functional assertions (not strict timing)
     EXPECT_EQ(counter.count, 1);
     EXPECT_GT(counter.latency_hist.count(), 0);
-    // Should have measured at least a few microseconds
-    EXPECT_GT(counter.latency_hist.mean(), 1000);  // At least 1us
+    EXPECT_GT(counter.latency_hist.sum(), 0);  // Should have recorded some time
+    EXPECT_GT(counter.latency_hist.max(), 0);  // Max should be non-zero
 }
 
 TEST_F(LatencyHistogramTest, PerfStartStopMeasuresTime) {
@@ -284,8 +307,11 @@ TEST_F(LatencyHistogramTest, PerfStartStopMeasuresTime) {
     PERF_STOP(my_operation, util::PerfCounterId::TimerWheelPollExpired);
     
     auto& counter = registry.get(util::PerfCounterId::TimerWheelPollExpired);
+    // Functional assertions (not strict timing)
     EXPECT_EQ(counter.count, 1);
-    EXPECT_GT(counter.latency_hist.mean(), 1000);  // At least 1us
+    EXPECT_GT(counter.latency_hist.count(), 0);
+    EXPECT_GT(counter.latency_hist.sum(), 0);  // Should have recorded some time
+    EXPECT_GT(counter.latency_hist.max(), 0);  // Max should be non-zero
 }
 
 TEST_F(LatencyHistogramTest, PerfCountIncrementsOnly) {

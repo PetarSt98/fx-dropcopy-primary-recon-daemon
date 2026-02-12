@@ -58,8 +58,21 @@ public:
         } else {
             // Linear bucketing: bucket = value / bucket_width
             // To avoid division, we use multiplication: bucket = (value * NumBuckets) / MaxValueNs
-            // This is safe as long as value < MaxValueNs (checked above)
-            bucket_idx = (value_ns * NumBuckets) / MaxValueNs;
+            // Use 128-bit multiplication to prevent overflow
+#if defined(__SIZEOF_INT128__)
+            __uint128_t product = static_cast<__uint128_t>(value_ns) * NumBuckets;
+            bucket_idx = static_cast<std::size_t>(product / MaxValueNs);
+#else
+            // Fallback: check if multiplication would overflow before performing it
+            // This is slower but safe on platforms without 128-bit integers
+            if (value_ns <= (UINT64_MAX / NumBuckets)) {
+                bucket_idx = (value_ns * NumBuckets) / MaxValueNs;
+            } else {
+                // Use double for the calculation to avoid overflow
+                const double ratio = static_cast<double>(value_ns) / MaxValueNs;
+                bucket_idx = static_cast<std::size_t>(ratio * NumBuckets);
+            }
+#endif
             if (bucket_idx >= NumBuckets) {
                 bucket_idx = NumBuckets - 1;  // Clamp to last regular bucket
             }
@@ -73,9 +86,18 @@ public:
     [[nodiscard]] std::uint64_t percentile(double p) const noexcept {
         if (count_ == 0) return 0;
         
-        // Clamp p to [0, 1] and compute 1-based rank (minimum of 1)
-        // This ensures correct behavior for small sample sizes and edge cases
+        // Clamp p to [0, 1]
         const double clamped_p = (p < 0.0) ? 0.0 : (p > 1.0) ? 1.0 : p;
+        
+        // Handle edge cases explicitly for reliability
+        if (clamped_p == 0.0) {
+            return min_;  // 0th percentile is the minimum
+        }
+        if (clamped_p == 1.0) {
+            return max_;  // 100th percentile is the maximum
+        }
+        
+        // Compute 1-based rank for interior percentiles
         const std::uint64_t target_rank = std::max<std::uint64_t>(1, 
             static_cast<std::uint64_t>(std::ceil(clamped_p * count_)));
         
@@ -112,6 +134,7 @@ public:
     [[nodiscard]] std::uint64_t count() const noexcept { return count_; }
     [[nodiscard]] std::uint64_t min() const noexcept { return min_; }
     [[nodiscard]] std::uint64_t max() const noexcept { return max_; }
+    [[nodiscard]] std::uint64_t sum() const noexcept { return sum_; }
     [[nodiscard]] std::uint64_t mean() const noexcept {
         return count_ > 0 ? sum_ / count_ : 0;
     }
