@@ -292,18 +292,25 @@ launch_publisher() {
     # Calculate sleep_ms to achieve desired rate for moderate/low loads.
     # The publisher sleeps sleep_ms after each event.
     # For rates < 1000/sec, calculate sleep_ms = 1000ms / rate
-    #   Example: 100 orders/sec per publisher -> 10ms sleep per event
-    # For rates >= 1000/sec per publisher, we set sleep_ms=0 (unthrottled)
+    #   Example: 100 orders/sec per publisher -> 10ms sleep per event.
+    # NOTE: Because this uses integer division, per-publisher rates in the ~500–999/sec
+    # range will all yield sleep_ms=1, so the effective send rate will be close to
+    # 1000 events/sec regardless of the exact configured rate. For precise control
+    # in that range, adjust ORDERS_PER_SEC downward or rely on unthrottled mode.
+    # For rates >= 1000/sec per publisher, we set sleep_ms=0 (unthrottled).
     local sleep_ms=0
     if [[ "${per_publisher_rate}" -lt 1000 ]]; then
         sleep_ms=$((1000 / per_publisher_rate))
+        if [[ "${per_publisher_rate}" -ge 500 && "${per_publisher_rate}" -lt 1000 ]]; then
+            log "${name}: WARNING: per-publisher rate ${per_publisher_rate}/sec will use sleep_ms=${sleep_ms}ms due to integer division; actual rate will be close to $((1000 / sleep_ms))/sec."
+        fi
     else
         log "${name}: per-publisher rate ${per_publisher_rate}/sec >= 1000, running in unthrottled mode"
     fi
     
     # Calculate total events for this publisher
     local duration_sec
-    duration_sec=$(bc <<< "${DURATION_HOURS} * 3600" | cut -d. -f1)
+    duration_sec=$(bc <<< "scale=0; (${DURATION_HOURS} * 3600 + 0.5) / 1")
     local total_events=$((per_publisher_rate * duration_sec))
     
     # Store expected count for drop verification
@@ -331,7 +338,7 @@ monitor_processes() {
     local start_time
     start_time=$(date +%s)
     local duration_sec
-    duration_sec=$(bc <<< "${DURATION_HOURS} * 3600" | cut -d. -f1)
+    duration_sec=$(bc <<< "scale=0; (${DURATION_HOURS} * 3600 + 0.5) / 1")
     local end_time=$((start_time + duration_sec))
     
     log "Monitoring for ${DURATION_HOURS} hours (${duration_sec} seconds)"
@@ -535,7 +542,33 @@ main() {
     # Give reconciler a moment to process final events
     sleep 5
     
-    # Verify event counts
+    # Gracefully shutdown reconciler to trigger final counter logging
+    log "Shutting down reconciler to capture final counters..."
+    if [[ -n "${RECOND_PID}" ]] && kill -0 "${RECOND_PID}" 2>/dev/null; then
+        kill -TERM "${RECOND_PID}" 2>/dev/null || true
+        
+        # Wait for reconciler to exit (timeout 30 seconds)
+        local shutdown_timeout=30
+        local shutdown_start
+        shutdown_start=$(date +%s)
+        while kill -0 "${RECOND_PID}" 2>/dev/null; do
+            local now
+            now=$(date +%s)
+            if (( now - shutdown_start > shutdown_timeout )); then
+                log "WARNING: Reconciler did not shutdown gracefully, forcing termination"
+                kill -9 "${RECOND_PID}" 2>/dev/null || true
+                break
+            fi
+            sleep 0.5
+        done
+        
+        # Wait for reconciler to complete and flush logs
+        wait "${RECOND_PID}" 2>/dev/null || true
+        sleep 2  # Give logger time to flush
+        log "Reconciler shutdown complete"
+    fi
+    
+    # Verify event counts (now that reconciler has logged final counters)
     log "Verifying event counts..."
     local internal dropcopy
     read -r internal dropcopy <<< "$(get_recond_counters)"

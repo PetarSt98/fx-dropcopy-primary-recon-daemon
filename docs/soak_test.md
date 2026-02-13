@@ -114,7 +114,7 @@ For rapid verification during development:
 cmake --preset release
 cmake --build build/release
 
-# Run 5-minute test
+# Run ~5-minute test
 ./scripts/soak_test.sh 0.083 1000
 
 # Analyze results
