@@ -12,25 +12,29 @@ Production-level Bash script that orchestrates a complete end-to-end load test.
 
 **Features:**
 - Configurable test duration (default: 24 hours)
-- Configurable order rate (default: 10,000 orders/sec)
+- Configurable total event rate (default: 10,000 events/sec split across both publishers)
 - Launches and manages all required components:
-  - Aeron MediaDriver
+  - Aeron MediaDriver (runs in /dev/shm for optimal performance)
   - Reconciler daemon (`fx_exec_recond`)
-  - Two FIX publishers (primary and dropcopy streams)
+  - Two FIX publishers (primary and dropcopy streams, each at 50% of total rate)
 - Comprehensive logging for all components
 - Real-time metrics collection every 10 seconds
+- Event drop verification (compares expected vs processed events)
+- Publisher liveness monitoring
 - Automatic cleanup on exit/interrupt
 - Defensive coding with proper error handling
 
 **Usage:**
 ```bash
-# Default: 24-hour test at 10k orders/sec
+# Default: 24-hour test at 10k events/sec total (5k per publisher)
 ./scripts/soak_test.sh
 
 # Custom duration and rate
-./scripts/soak_test.sh 48 5000    # 48 hours at 5k orders/sec
-./scripts/soak_test.sh 0.1 100    # 6 minutes at 100 orders/sec
+./scripts/soak_test.sh 48 5000    # 48 hours at 5k events/sec total (2.5k per publisher)
+./scripts/soak_test.sh 0.1 100    # 6 minutes at 100 events/sec total (50 per publisher)
 ```
+
+**Important:** The rate parameter is the TOTAL system ingress rate. Each publisher sends at 50% of this rate.
 
 **Requirements:**
 - Built executables in `build/release/`:
@@ -38,9 +42,10 @@ Production-level Bash script that orchestrates a complete end-to-end load test.
   - `fx_aeron_publisher`
 - `aeronmd` available in PATH
 - `/proc` filesystem (Linux) for metrics collection
+- `/dev/shm` available (for Aeron performance)
 
 **Output Files:**
-- `soak_logs/soak_metrics.csv` - Timestamped metrics (RSS, CPU, events)
+- `soak_logs/soak_metrics.csv` - Timestamped metrics (RSS, CPU, internal/dropcopy/total events)
 - `soak_logs/recond.log` - Reconciler daemon logs
 - `soak_logs/aeronmd.log` - MediaDriver logs
 - `soak_logs/primary_pub.log` - Primary publisher logs
@@ -77,7 +82,7 @@ python3 scripts/analyze_soak_test.py --help
 **Output Example:**
 ```
 ============================================================
-24-Hour Soak Test Analysis
+Soak Test Analysis (duration: 24.0 hours)
 ============================================================
 
 Memory Usage:
@@ -93,7 +98,7 @@ CPU Usage:
 Throughput:
   Total:    864,000,000 events
   Duration: 24.0 hours
-  Rate:     10,000 orders/sec
+  Rate:     10,000 events/sec
 
 ✅ PASS: No significant memory leak (threshold: 50 MB)
 
@@ -145,10 +150,13 @@ The soak test collects the following metrics every 10 seconds:
 
 | Metric | Description |
 |--------|-------------|
-| `timestamp` | Wall-clock time of measurement |
+| `timestamp` | Wall-clock time of measurement (human-readable) |
+| `epoch_sec` | Unix timestamp (seconds since epoch) |
 | `elapsed_sec` | Seconds since test start |
 | `recond_rss_mb` | Reconciler RSS memory in MB |
 | `recond_cpu_pct` | Reconciler CPU usage percentage |
+| `internal_events` | Events processed from internal/primary stream |
+| `dropcopy_events` | Events processed from dropcopy stream |
 | `events_total` | Total events processed (internal + dropcopy) |
 
 ## Acceptance Criteria
@@ -157,8 +165,9 @@ A successful soak test must meet:
 
 1. **Stability**: No process crashes or OOM for full duration
 2. **Memory**: Memory growth < 50 MB over test duration
-3. **Data Integrity**: Reconciler counters indicate processing (note: full published-vs-processed reconciliation not yet implemented)
-4. **Performance**: Sustained throughput at target rate
+3. **Data Integrity**: Event drops < 100 (verified by comparing expected vs processed counts)
+4. **Performance**: Sustained throughput at target rate (accounting for rate splitting across publishers)
+5. **Publisher Health**: Both publishers complete successfully without early termination
 
 ## Troubleshooting
 
@@ -212,17 +221,25 @@ If CPU usage exceeds expectations:
 
 ### Rate Control
 
-The publisher rate is configured via the `sleep_ms` delay used by `fx_aeron_publisher`:
-- For rates < 1000/sec: `sleep_ms = 1000 / rate` milliseconds per successful event (the publisher sleeps this long after each send)
-- For rates ≥ 1000/sec: `sleep_ms = 0` (no sleep between sends; the publisher runs as fast as possible and is effectively unthrottled)
+**Important:** The rate parameter is the TOTAL system ingress rate, split evenly between the two publishers.
 
-Note: With two publishers, the reconciler will see approximately 2× the configured rate.
+The publisher rate is configured via the `sleep_ms` delay used by `fx_aeron_publisher`:
+- For per-publisher rates < 1000/sec: `sleep_ms = 1000 / rate` milliseconds per successful event (the publisher sleeps this long after each send)
+- For per-publisher rates ≥ 1000/sec: `sleep_ms = 0` (no sleep between sends; the publisher runs unthrottled)
+
+**Example:** If you specify `10000` events/sec:
+- Each publisher targets 5000 events/sec
+- At 5000/sec per publisher, sleep_ms = 0 (unthrottled mode)
+- Actual rate depends on system capacity and backpressure
 
 The effective rate may vary based on:
 - Network latency (UDP transport)
 - System scheduler
 - Reconciler processing speed
 - Available CPU/memory
+- Aeron backpressure mechanisms
+
+**Note:** For rates ≥ 2000/sec total (≥1000/sec per publisher), the test runs in "max throughput" mode where actual rate may exceed the target. This is intentional for high-rate soak testing.
 
 ### Signal Handling
 

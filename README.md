@@ -416,12 +416,13 @@ the “Reconciler consumed” counters in the recon logs.
 For production-grade stability validation, see the [Soak Test Guide](docs/soak_test.md):
 
 ```bash
-# 24-hour stability test at 10k orders/sec
+# 24-hour stability test at 10k events/sec total (5k per publisher)
 ./scripts/soak_test.sh 24 10000
 
 # Analyze results
 python3 scripts/analyze_soak_test.py soak_logs/soak_metrics.csv
 ```
 
-The soak test suite validates memory stability, CPU usage, and throughput under
-sustained high-load conditions.
+The soak test suite validates memory stability, CPU usage, throughput, and event integrity under
+sustained high-load conditions. The rate parameter is the TOTAL system ingress rate, split evenly
+between primary and dropcopy publishers.
