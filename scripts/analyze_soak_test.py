@@ -64,8 +64,19 @@ def load_metrics(csv_path: Path) -> pd.DataFrame:
         print(f"Error reading CSV: {e}", file=sys.stderr)
         sys.exit(1)
     
-    # Validate required columns
-    required_cols = ["timestamp", "elapsed_sec", "recond_rss_mb", "recond_cpu_pct", "events_total"]
+    # Validate required columns (support both old and new CSV formats)
+    required_cols = ["elapsed_sec", "recond_rss_mb", "recond_cpu_pct"]
+    
+    # For events_total, check if we have the new format (internal_events, dropcopy_events)
+    # or old format (events_total)
+    if "events_total" not in df.columns:
+        if "internal_events" in df.columns and "dropcopy_events" in df.columns:
+            # New format - calculate events_total
+            df["events_total"] = df["internal_events"] + df["dropcopy_events"]
+        else:
+            print("Error: Missing event count columns (need either 'events_total' or 'internal_events' + 'dropcopy_events')", file=sys.stderr)
+            sys.exit(1)
+    
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         print(f"Error: Missing required columns: {missing_cols}", file=sys.stderr)
@@ -169,7 +180,7 @@ def print_report(
     print("Throughput:")
     print(f"  Total:    {format_large_number(total_events)} events")
     print(f"  Duration: {duration_hours:.1f} hours")
-    print(f"  Rate:     {rate_per_sec:,.0f} orders/sec")
+    print(f"  Rate:     {rate_per_sec:,.0f} events/sec")
     print()
     
     # Pass/Fail status
