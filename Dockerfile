@@ -62,7 +62,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         linux-tools-common \
         linux-tools-generic \
-        linux-tools-$(uname -r) \
         perl \
     && rm -rf /var/lib/apt/lists/* \
     && PERF_REAL=$(find /usr/lib/linux-tools -name perf -type f 2>/dev/null | head -1) \
