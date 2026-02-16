@@ -426,3 +426,19 @@ python3 scripts/analyze_soak_test.py soak_logs/soak_metrics.csv
 The soak test suite validates memory stability, CPU usage, throughput, and event integrity under
 sustained high-load conditions. The rate parameter is the TOTAL system ingress rate, split evenly
 between primary and dropcopy publishers.
+
+**CPU Profiling (Optional)**
+
+Generate CPU flame graphs to identify hot spots in the reconciler. See the
+[Performance Guide](docs/PERFORMANCE.md) for details:
+
+```bash
+# Clone FlameGraph toolkit pinned to v1.0 (one-time setup)
+git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+
+# Generate flame graph (60s profile at 10k events/sec)
+./scripts/generate_flamegraph.sh 60 10000
+
+# View results
+firefox docs/performance/flamegraph.svg
+```

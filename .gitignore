@@ -29,6 +29,16 @@ __pycache__/
 soak_logs/
 soak_metrics.csv
 
+# FlameGraph toolkit (cloned externally)
+tools/FlameGraph/
+
+# Performance profiling artifacts
+docs/performance/flamegraph.svg
+docs/performance/perf_report.txt
+docs/performance/top_functions.txt
+perf.data
+perf.data.old
+
 # Precompiled headers
 *.gch
 *.pch
