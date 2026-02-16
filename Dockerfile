@@ -69,11 +69,11 @@ RUN apt-get update \
     && cp "$PERF_REAL" /usr/bin/perf \
     && chmod +x /usr/bin/perf \
     && perf --version \
-    && git clone --depth 1 \
-        https://github.com/brendangregg/FlameGraph.git tools/FlameGraph \
+    && git init tools/FlameGraph \
     && cd tools/FlameGraph \
-    && git fetch origin 810687f180f3c4929b5d965f54817a5218c9ea64 \
-    && git checkout 810687f180f3c4929b5d965f54817a5218c9ea64 \
+    && git remote add origin https://github.com/brendangregg/FlameGraph.git \
+    && git fetch --depth 1 origin 810687f180f3c4929b5d965f54817a5218c9ea64 \
+    && git checkout FETCH_HEAD \
     && cd ../..
 
 # Fix CRLF line endings from Windows host and ensure scripts are executable
