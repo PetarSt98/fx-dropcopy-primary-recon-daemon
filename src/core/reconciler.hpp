@@ -54,6 +54,7 @@ struct ReconCounters {
     std::uint64_t divergence_resolved{0};     // Confirmed divergences that later resolved
     std::uint64_t gaps_closed_by_timeout{0};  // Sequence gaps closed due to timeout
     std::uint64_t gaps_closed_by_fill{0};     // Sequence gaps closed by out-of-order message fill
+    std::uint64_t orders_recycled{0};          // Terminal orders recycled from hash table
 };
 
 // Default deduplication window: don't re-emit identical divergence within this period.

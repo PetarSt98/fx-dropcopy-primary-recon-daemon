@@ -984,4 +984,154 @@ TEST_F(ReconcilerTwoStageTest, EmitConfirmedDivergence_DeduplicationWorksAfterSu
     EXPECT_GE(h.counters.divergence_deduped, 1u);
 }
 
+// ============================================================================
+// Order Recycling Tests
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, RecycleOrder_MatchedAndBothTerminal) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Send matching Filled events on both sides
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Filled,
+                           100, 5000, ts, "RECYCLE_MATCH", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Filled,
+                           100, 5000, ts + 100, "RECYCLE_MATCH", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    // Order should be matched and terminal -> recycled
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.store.recycled_count(), 1u);
+
+    // Order should no longer be findable in the store
+    const auto key = core::make_order_key(p_ev);
+    EXPECT_EQ(h.store.find(key), nullptr);
+}
+
+TEST_F(ReconcilerTwoStageTest, NoRecycle_MatchedButNotTerminal) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Send matching Working events on both sides (non-terminal status)
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Working,
+                           0, 5000, ts, "NORECYCLE1", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Working,
+                           0, 5000, ts + 100, "NORECYCLE1", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    // Should be matched but NOT recycled (Working is not terminal)
+    EXPECT_EQ(h.counters.orders_recycled, 0u);
+    EXPECT_EQ(h.store.recycled_count(), 0u);
+
+    const auto key = core::make_order_key(p_ev);
+    EXPECT_NE(h.store.find(key), nullptr);
+}
+
+TEST_F(ReconcilerTwoStageTest, NoRecycle_InGrace) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Send mismatching Filled events (different price)
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Filled,
+                           100, 5000, ts, "NORECYCLE_GRACE", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Filled,
+                           100, 9999, ts + 100, "NORECYCLE_GRACE", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    // Should be in grace period, NOT recycled even though both terminal
+    EXPECT_EQ(h.counters.orders_recycled, 0u);
+
+    const auto key = core::make_order_key(p_ev);
+    auto* os = h.store.find(key);
+    ASSERT_NE(os, nullptr);
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
+}
+
+TEST_F(ReconcilerTwoStageTest, RecycleAfterTimerExpiry_DivergedConfirmed) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Send mismatching Filled events
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Filled,
+                           100, 5000, ts, "RECYCLE_DIVERGE", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Filled,
+                           100, 9999, ts + 100, "RECYCLE_DIVERGE", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    const auto key = core::make_order_key(p_ev);
+    auto* os = h.store.find(key);
+    ASSERT_NE(os, nullptr);
+    EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
+    const auto gen = os->timer_generation;
+
+    // Expire the grace timer
+    h.reconciler->on_grace_deadline_expired(key, gen);
+
+    // Order should be DivergedConfirmed and then recycled (both sides Filled = terminal)
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.store.find(key), nullptr);
+}
+
+TEST_F(ReconcilerTwoStageTest, RecycleOrder_CanceledOnBothSides) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Send matching Canceled events
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Canceled,
+                           0, 0, ts, "RECYCLE_CANCEL", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Canceled,
+                           0, 0, ts + 100, "RECYCLE_CANCEL", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.store.find(core::make_order_key(p_ev)), nullptr);
+}
+
+TEST_F(ReconcilerTwoStageTest, RecycleMultipleOrders) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Process 3 orders that all reach Matched + terminal
+    for (int i = 0; i < 3; ++i) {
+        const std::string cid = "MULTI_REC" + std::to_string(i);
+        auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Filled,
+                               100 * (i + 1), 5000, ts + i * 1000, cid.c_str(), "EX1");
+        auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Filled,
+                               100 * (i + 1), 5000, ts + i * 1000 + 100, cid.c_str(), "EX1");
+        h.reconciler->process_event_for_test(p_ev);
+        h.reconciler->process_event_for_test(d_ev);
+    }
+
+    EXPECT_EQ(h.counters.orders_recycled, 3u);
+    EXPECT_EQ(h.store.recycled_count(), 3u);
+    EXPECT_EQ(h.store.size(), 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, RecycleOrderCounterIncrements) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    EXPECT_EQ(h.counters.orders_recycled, 0u);
+
+    auto p_ev = make_event(core::Source::Primary, core::OrdStatus::Rejected,
+                           0, 0, ts, "CTR1", "EX1");
+    auto d_ev = make_event(core::Source::DropCopy, core::OrdStatus::Rejected,
+                           0, 0, ts + 100, "CTR1", "EX1");
+
+    h.reconciler->process_event_for_test(p_ev);
+    h.reconciler->process_event_for_test(d_ev);
+
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+}
+
 } // namespace

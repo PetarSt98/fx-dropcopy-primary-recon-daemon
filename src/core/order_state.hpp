@@ -314,6 +314,19 @@ inline void record_divergence_emission(
     ++os.divergence_emit_count;
 }
 
+// Check if an order can be safely recycled from the hash table.
+// Recycling criteria:
+//   1. Reconciliation is complete (Matched or DivergedConfirmed)
+//   2. Both sides have reached terminal FIX status (Filled, Canceled, or Rejected)
+[[nodiscard]] inline bool is_recyclable(const OrderState& os) noexcept {
+    if (os.recon_state != ReconState::Matched &&
+        os.recon_state != ReconState::DivergedConfirmed) {
+        return false;
+    }
+    return is_terminal_status(os.internal_status) &&
+           is_terminal_status(os.dropcopy_status);
+}
+
 static_assert(sizeof(OrderState) <= 256, "OrderState exceeds cache-friendly size limit");
 static_assert(std::is_trivially_copyable_v<OrderState>, "OrderState must remain trivially copyable");
 

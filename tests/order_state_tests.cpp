@@ -566,4 +566,112 @@ TEST(OrderStateGapUncertaintyTest, GapUncertaintyFlags_DefaultInitialized) {
     EXPECT_FALSE(core::has_gap_uncertainty(*state));
 }
 
+// ============================================================================
+// is_recyclable() Tests
+// ============================================================================
+
+TEST(IsRecyclableTest, NotRecyclable_Unknown) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Unknown;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_InGrace) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::InGrace;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_AwaitingPrimary) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::AwaitingPrimary;
+    os.internal_status = core::OrdStatus::Unknown;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_AwaitingDropCopy) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::AwaitingDropCopy;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Unknown;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_SuppressedByGap) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::SuppressedByGap;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_Matched_NonTerminalInternal) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Working;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_Matched_NonTerminalDropcopy) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::PartiallyFilled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, Recyclable_Matched_BothFilled) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_TRUE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, Recyclable_Matched_BothCanceled) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Canceled;
+    os.dropcopy_status = core::OrdStatus::Canceled;
+    EXPECT_TRUE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, Recyclable_Matched_BothRejected) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Rejected;
+    os.dropcopy_status = core::OrdStatus::Rejected;
+    EXPECT_TRUE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, Recyclable_DivergedConfirmed_BothTerminal) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::DivergedConfirmed;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Canceled;
+    EXPECT_TRUE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, NotRecyclable_DivergedConfirmed_InternalNotTerminal) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::DivergedConfirmed;
+    os.internal_status = core::OrdStatus::Working;
+    os.dropcopy_status = core::OrdStatus::Filled;
+    EXPECT_FALSE(core::is_recyclable(os));
+}
+
+TEST(IsRecyclableTest, Recyclable_MixedTerminalStatuses) {
+    core::OrderState os{};
+    os.recon_state = core::ReconState::Matched;
+    os.internal_status = core::OrdStatus::Filled;
+    os.dropcopy_status = core::OrdStatus::Rejected;
+    EXPECT_TRUE(core::is_recyclable(os));
+}
+
 } // namespace

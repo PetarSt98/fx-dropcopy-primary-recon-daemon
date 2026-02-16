@@ -29,16 +29,24 @@ public:
 
     OrderState* upsert(const ExecEvent& ev) noexcept;
     OrderState* find(OrderKey key) noexcept;
+    void recycle(OrderKey key) noexcept;
     void reset_epoch() noexcept;
 
     std::size_t bucket_count() const noexcept { return bucket_count_; }
     std::size_t size() const noexcept { return size_; }
     std::size_t overflow_count() const noexcept { return overflow_count_; }
+    std::size_t recycled_count() const noexcept { return recycled_count_; }
 
 private:
     // Sentinel key marking an empty bucket. make_order_key is allowed to produce 0,
     // so we pick the maximal value to avoid collisions with real keys.
     static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();
+
+    // Tombstone key marks a bucket that was occupied and then recycled.
+    // find() and upsert() treat tombstones as occupied for probing continuity
+    // but available for insertion (upsert only). This preserves probe chains
+    // after recycle() removes an entry.
+    static constexpr OrderKey tombstone_key_ = std::numeric_limits<OrderKey>::max() - 1;
 
     static std::size_t next_power_of_two(std::size_t v);
 
@@ -51,6 +59,7 @@ private:
     std::size_t bucket_count_{0};
     std::size_t size_{0};
     std::size_t overflow_count_{0};
+    std::size_t recycled_count_{0};
     std::size_t max_probe_{0};
 };
 

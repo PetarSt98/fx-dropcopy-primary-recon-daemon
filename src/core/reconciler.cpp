@@ -180,11 +180,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         st->recon_state = ReconState::DivergedConfirmed;
         emit_confirmed_divergence(*st, error_mismatch, now_tsc);
         ++counters_.mismatch_confirmed;
-        return;
-    }
-
+        // Fall through to recycling check below
+    } else if (config_.enable_windowed_recon && timer_wheel_) {
     // === Two-stage reconciliation ===
-    if (config_.enable_windowed_recon && timer_wheel_) {
         // Compute current mismatch BEFORE state transition
         const MismatchMask new_mismatch = compute_mismatch(*st, config_.qty_tolerance,
                                                             config_.px_tolerance);
@@ -202,21 +200,31 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                             "divergence_ring_drop type=%u key=%llu",
                             static_cast<unsigned>(div.type),
                             static_cast<unsigned long long>(div.key));
-                return;
+                // Fall through to recycling check below
+            } else {
+                ++counters_.divergence_total;
+                increment_divergence_counter(div.type);
             }
-            ++counters_.divergence_total;
-            increment_divergence_counter(div.type);
         }
     }
 
     // End-to-end latency: from Aeron ingest timestamp to reconciliation complete.
     // Covers ring transit time + full process_event() work.
+    // Tracked before recycling so recycled orders are included in metrics.
     PERF_IF_ENABLED({
         const std::uint64_t e2e_ns = ::util::tsc_to_ns(::util::rdtsc() - ev.ingest_tsc);
         ::util::PerfRegistry::instance()
             .get(::util::PerfCounterId::EndToEndLatency)
             .record_latency(e2e_ns);
     });
+
+    // Recycle terminal orders: removes from hash table but does NOT reclaim
+    // arena memory (memory is reclaimed in bulk at end-of-day via reset_epoch()).
+    if (is_recyclable(*st)) {
+        store_.recycle(st->key);
+        ++counters_.orders_recycled;
+        // 'st' is now dangling - do NOT access after this point
+    }
 }
 
 void Reconciler::run() {
@@ -425,9 +433,10 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
             os->recon_state = ReconState::DivergedConfirmed;
             emit_confirmed_divergence(*os, mismatch, now);
             ++counters_.mismatch_confirmed;
-            return;
+            // Fall through to recycling check below
+        } else {
+            ++counters_.gap_suppressions;
         }
-        ++counters_.gap_suppressions;
     } else {
         // Max suppression time exceeded - emit divergence
         os->recon_state = ReconState::DivergedConfirmed;
@@ -440,6 +449,12 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
     emit_confirmed_divergence(*os, mismatch, now);
     ++counters_.mismatch_confirmed;
 }
+
+    // After handling expiry, check if order can now be recycled
+    if (is_recyclable(*os)) {
+        store_.recycle(os->key);
+        ++counters_.orders_recycled;
+    }
 }
 
 void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch,
