@@ -20,6 +20,15 @@ test_*.sh
 benchmark_results.json
 bench/out/
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Soak test artifacts
+soak_logs/
+soak_metrics.csv
+
 # Precompiled headers
 *.gch
 *.pch
