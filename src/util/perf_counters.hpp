@@ -32,7 +32,7 @@ enum class PerfCounterId : std::size_t {
 // PerfCounter - Tracks operation count and latency histogram
 struct PerfCounter {
     std::uint64_t count{0};
-    LatencyHistogram<2048, 20'000> latency_hist;  // 2048 buckets, max 20us (~9.8ns bins)
+    LatencyHistogram<8192, 20'000> latency_hist;  // 8192 buckets, max 20us (~2.4ns bins)
     
     void record_latency(std::uint64_t ns) noexcept {
         ++count;

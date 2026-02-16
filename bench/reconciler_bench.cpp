@@ -12,7 +12,25 @@
 #include "core/exec_event.hpp"
 
 // ============================================================================
-// Hash Table Lookup Benchmarks
+// FX Reconciler - Microbenchmarks (Google Benchmark)
+//
+// These benchmarks measure RAW operation throughput with zero instrumentation
+// overhead (built with FX_PERF_ENABLED=OFF).  Numbers here will always be
+// lower than the latency histogram numbers reported by the FullPerfReport
+// integration test (built with FX_PERF_ENABLED=ON) for two reasons:
+//
+//   1.  PERF_SCOPE instrumentation overhead:  each instrumented call adds
+//       two rdtsc fences, a TSC-to-nanosecond conversion, and a histogram
+//       bucket update – roughly 15-25 ns of overhead per call.
+//
+//   2.  Histogram quantization:  the LatencyHistogram reports percentiles
+//       at bucket midpoints.  For sub-10 ns operations the bucket width
+//       (~2.4 ns with 8192 buckets / 20 µs range) can shift the reported
+//       P50 noticeably above the true value.
+//
+// In short, the microbenchmark numbers reflect the cost your production
+// binary pays (no instrumentation), while the FullPerfReport numbers
+// include measurement overhead and are useful for relative comparisons.
 // ============================================================================
 
 // Best case: First probe (key in first slot)
