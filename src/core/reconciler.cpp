@@ -209,23 +209,23 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         }
     }
 
-    // Recycle terminal orders: removes from hash table but does NOT reclaim
-    // arena memory (memory is reclaimed in bulk at end-of-day via reset_epoch()).
-    if (is_recyclable(*st)) {
-        store_.recycle(st->key);
-        ++counters_.orders_recycled;
-        // 'st' is now dangling - do NOT access after this point
-        return;
-    }
-
     // End-to-end latency: from Aeron ingest timestamp to reconciliation complete.
     // Covers ring transit time + full process_event() work.
+    // Tracked before recycling so recycled orders are included in metrics.
     PERF_IF_ENABLED({
         const std::uint64_t e2e_ns = ::util::tsc_to_ns(::util::rdtsc() - ev.ingest_tsc);
         ::util::PerfRegistry::instance()
             .get(::util::PerfCounterId::EndToEndLatency)
             .record_latency(e2e_ns);
     });
+
+    // Recycle terminal orders: removes from hash table but does NOT reclaim
+    // arena memory (memory is reclaimed in bulk at end-of-day via reset_epoch()).
+    if (is_recyclable(*st)) {
+        store_.recycle(st->key);
+        ++counters_.orders_recycled;
+        // 'st' is now dangling - do NOT access after this point
+    }
 }
 
 void Reconciler::run() {
