@@ -42,6 +42,12 @@ private:
     // so we pick the maximal value to avoid collisions with real keys.
     static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();
 
+    // Tombstone key marks a bucket that was occupied and then recycled.
+    // find() and upsert() treat tombstones as occupied for probing continuity
+    // but available for insertion (upsert only). This preserves probe chains
+    // after recycle() removes an entry.
+    static constexpr OrderKey tombstone_key_ = std::numeric_limits<OrderKey>::max() - 1;
+
     static std::size_t next_power_of_two(std::size_t v);
 
     std::size_t mask() const noexcept { return bucket_count_ - 1; }

@@ -180,11 +180,9 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         st->recon_state = ReconState::DivergedConfirmed;
         emit_confirmed_divergence(*st, error_mismatch, now_tsc);
         ++counters_.mismatch_confirmed;
-        return;
-    }
-
+        // Fall through to recycling check below
+    } else if (config_.enable_windowed_recon && timer_wheel_) {
     // === Two-stage reconciliation ===
-    if (config_.enable_windowed_recon && timer_wheel_) {
         // Compute current mismatch BEFORE state transition
         const MismatchMask new_mismatch = compute_mismatch(*st, config_.qty_tolerance,
                                                             config_.px_tolerance);
@@ -202,10 +200,11 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
                             "divergence_ring_drop type=%u key=%llu",
                             static_cast<unsigned>(div.type),
                             static_cast<unsigned long long>(div.key));
-                return;
+                // Fall through to recycling check below
+            } else {
+                ++counters_.divergence_total;
+                increment_divergence_counter(div.type);
             }
-            ++counters_.divergence_total;
-            increment_divergence_counter(div.type);
         }
     }
 
@@ -434,9 +433,10 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
             os->recon_state = ReconState::DivergedConfirmed;
             emit_confirmed_divergence(*os, mismatch, now);
             ++counters_.mismatch_confirmed;
-            return;
+            // Fall through to recycling check below
+        } else {
+            ++counters_.gap_suppressions;
         }
-        ++counters_.gap_suppressions;
     } else {
         // Max suppression time exceeded - emit divergence
         os->recon_state = ReconState::DivergedConfirmed;

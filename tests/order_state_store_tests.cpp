@@ -220,4 +220,56 @@ TEST_F(OrderStateStoreTest, RecycledCountAccumulates) {
     EXPECT_EQ(store.recycled_count(), 3u);
 }
 
+// Ensure that recycling an entry that may lie earlier in a probe chain
+// does not make other colliding entries unreachable.
+TEST_F(OrderStateStoreTest, RecycleDoesNotBreakProbeChain) {
+    // Use a small capacity to increase the likelihood of collisions.
+    core::OrderStateStore store(arena_, 4);
+    const std::size_t mask = store.bucket_count() - 1;
+
+    // Find two distinct keys that map to the same initial bucket
+    std::vector<bool> bucket_seen(store.bucket_count(), false);
+    std::vector<core::ExecEvent> bucket_sample(store.bucket_count());
+    core::ExecEvent first{};
+    core::ExecEvent second{};
+    bool found = false;
+
+    for (int i = 0; i < 2000 && !found; ++i) {
+        const auto ev = make_event("CHAIN" + std::to_string(i));
+        const auto key = core::make_order_key(ev);
+        const auto bucket = key & mask;
+        if (!bucket_seen[bucket]) {
+            bucket_seen[bucket] = true;
+            bucket_sample[bucket] = ev;
+        } else if (core::make_order_key(bucket_sample[bucket]) != key) {
+            first = bucket_sample[bucket];
+            second = ev;
+            found = true;
+        }
+    }
+
+    ASSERT_TRUE(found) << "Unable to synthesize two distinct keys mapping to same bucket";
+
+    const auto key1 = core::make_order_key(first);
+    const auto key2 = core::make_order_key(second);
+
+    core::OrderState* st1 = store.upsert(first);
+    core::OrderState* st2 = store.upsert(second);
+
+    ASSERT_NE(st1, nullptr);
+    ASSERT_NE(st2, nullptr);
+    EXPECT_NE(st1, st2);
+
+    // Sanity check: both keys should be findable before recycling.
+    EXPECT_EQ(store.find(key1), st1);
+    EXPECT_EQ(store.find(key2), st2);
+
+    // Recycle the first key; this must not prevent finding the second.
+    store.recycle(key1);
+
+    EXPECT_EQ(store.find(key1), nullptr);
+    EXPECT_EQ(store.size(), 1u);
+    EXPECT_EQ(store.find(key2), st2);
+}
+
 } // namespace

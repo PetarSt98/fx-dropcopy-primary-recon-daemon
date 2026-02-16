@@ -53,28 +53,37 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
     PERF_SCOPE(::util::PerfCounterId::HashTableUpsert);
     
     const OrderKey key = make_order_key(ev);
-    if (key == empty_key_) {
+    if (key == empty_key_ || key == tombstone_key_) {
         ++overflow_count_;
         return nullptr;
     }
 
     const std::size_t start = hash(key) & mask();
     std::size_t idx = start;
+    std::size_t first_tombstone = std::numeric_limits<std::size_t>::max();
 
     for (std::size_t probe = 0; probe < max_probe_; ++probe) {
         const OrderKey bucket_key = keys_[idx];
         if (bucket_key == empty_key_) {
+            // End of probe chain: insert at first tombstone if found, else here
+            const std::size_t insert_idx = (first_tombstone != std::numeric_limits<std::size_t>::max())
+                                           ? first_tombstone : idx;
             OrderState* st = create_order_state(arena_, key);
             if (!st) {
                 ++overflow_count_;
                 return nullptr;
             }
-            keys_[idx] = key;
-            values_[idx] = st;
+            keys_[insert_idx] = key;
+            values_[insert_idx] = st;
             ++size_;
             return st;
         }
-        if (bucket_key == key) {
+        if (bucket_key == tombstone_key_) {
+            // Remember first tombstone slot for potential reuse
+            if (first_tombstone == std::numeric_limits<std::size_t>::max()) {
+                first_tombstone = idx;
+            }
+        } else if (bucket_key == key) {
             return values_[idx];
         }
         idx = (idx + 1) & mask();
@@ -87,7 +96,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
 OrderState* OrderStateStore::find(OrderKey key) noexcept {
     PERF_SCOPE(::util::PerfCounterId::HashTableLookup);
     
-    if (key == empty_key_) {
+    if (key == empty_key_ || key == tombstone_key_) {
         return nullptr;
     }
 
@@ -99,6 +108,7 @@ OrderState* OrderStateStore::find(OrderKey key) noexcept {
         if (bucket_key == empty_key_) {
             return nullptr;
         }
+        // Skip tombstones - they don't terminate probe chain
         if (bucket_key == key) {
             return values_[idx];
         }
@@ -108,7 +118,7 @@ OrderState* OrderStateStore::find(OrderKey key) noexcept {
 }
 
 void OrderStateStore::recycle(OrderKey key) noexcept {
-    if (key == empty_key_) {
+    if (key == empty_key_ || key == tombstone_key_) {
         return;
     }
 
@@ -119,7 +129,7 @@ void OrderStateStore::recycle(OrderKey key) noexcept {
         const OrderKey bucket_key = keys_[idx];
 
         if (bucket_key == key) {
-            keys_[idx] = empty_key_;
+            keys_[idx] = tombstone_key_;
             values_[idx] = nullptr;
             --size_;
             ++recycled_count_;

@@ -1076,7 +1076,7 @@ TEST_F(ReconcilerTwoStageTest, RecycleAfterTimerExpiry_DivergedConfirmed) {
     h.reconciler->on_grace_deadline_expired(key, gen);
 
     // Order should be DivergedConfirmed and then recycled (both sides Filled = terminal)
-    EXPECT_GE(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
     EXPECT_EQ(h.store.find(key), nullptr);
 }
 
