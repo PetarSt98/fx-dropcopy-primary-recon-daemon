@@ -107,13 +107,13 @@ public:
         for (std::size_t i = 0; i <= NumBuckets; ++i) {
             cumulative += buckets_[i];
             if (cumulative >= target_rank) {
-                // Return the upper bound of this bucket
+                // Return an estimate for this bucket
                 if (i == NumBuckets) {
                     // Overflow bucket - return max observed value
                     return max_;
                 } else {
-                    // Regular bucket - return bucket upper bound
-                    return ((i + 1) * MaxValueNs) / NumBuckets;
+                    // Regular bucket - return bucket midpoint for more accurate estimate
+                    return ((2 * i + 1) * MaxValueNs) / (2 * NumBuckets);
                 }
             }
         }
