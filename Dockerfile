@@ -68,7 +68,7 @@ RUN apt-get update \
     && if [ -z "$PERF_REAL" ]; then echo "FATAL: perf binary not found under /usr/lib/linux-tools" && exit 1; fi \
     && cp "$PERF_REAL" /usr/bin/perf \
     && chmod +x /usr/bin/perf \
-    && perf --version
+    && perf --version \
     && git init tools/FlameGraph \
     && cd tools/FlameGraph \
     && git remote add origin https://github.com/brendangregg/FlameGraph.git \
