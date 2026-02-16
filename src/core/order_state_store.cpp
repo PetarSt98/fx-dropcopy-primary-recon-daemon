@@ -1,6 +1,7 @@
 #include "core/order_state_store.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include "util/perf_macros.hpp"
@@ -65,13 +66,17 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
     for (std::size_t probe = 0; probe < max_probe_; ++probe) {
         const OrderKey bucket_key = keys_[idx];
         if (bucket_key == empty_key_) {
-            const std::size_t insert_idx = (first_tombstone != MAX) ? first_tombstone : idx;
+            const std::size_t insert_idx = (first_tombstone != std::numeric_limits<std::size_t>::max())
+                                           ? first_tombstone : idx;
             
-            // NEW: If tombstone has memory, reuse it!
+            // If tombstone has memory from a recycled order, reuse it
             if (insert_idx != idx && values_[insert_idx] != nullptr) {
                 OrderState* st = values_[insert_idx];
-                std::memset(st, 0, sizeof(OrderState));  // Zero the memory
-                st->key = key;  // Set new key
+                std::memset(static_cast<void*>(st), 0, sizeof(OrderState));
+                st->key = key;
+                st->internal_status = OrdStatus::Unknown;
+                st->dropcopy_status = OrdStatus::Unknown;
+                st->recon_state = ReconState::Unknown;
                 keys_[insert_idx] = key;
                 ++size_;
                 return st;
