@@ -65,9 +65,19 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
     for (std::size_t probe = 0; probe < max_probe_; ++probe) {
         const OrderKey bucket_key = keys_[idx];
         if (bucket_key == empty_key_) {
-            // End of probe chain: insert at first tombstone if found, else here
-            const std::size_t insert_idx = (first_tombstone != std::numeric_limits<std::size_t>::max())
-                                           ? first_tombstone : idx;
+            const std::size_t insert_idx = (first_tombstone != MAX) ? first_tombstone : idx;
+            
+            // NEW: If tombstone has memory, reuse it!
+            if (insert_idx != idx && values_[insert_idx] != nullptr) {
+                OrderState* st = values_[insert_idx];
+                std::memset(st, 0, sizeof(OrderState));  // Zero the memory
+                st->key = key;  // Set new key
+                keys_[insert_idx] = key;
+                ++size_;
+                return st;
+            }
+            
+            // Original path: allocate new from arena
             OrderState* st = create_order_state(arena_, key);
             if (!st) {
                 ++overflow_count_;
@@ -130,7 +140,6 @@ void OrderStateStore::recycle(OrderKey key) noexcept {
 
         if (bucket_key == key) {
             keys_[idx] = tombstone_key_;
-            values_[idx] = nullptr;
             --size_;
             ++recycled_count_;
             return;
