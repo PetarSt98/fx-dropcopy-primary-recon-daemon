@@ -64,13 +64,30 @@ RUN apt-get update \
         linux-tools-generic \
         perl \
     && rm -rf /var/lib/apt/lists/* \
-    && PERF_REAL=$(find /usr/lib/linux-tools -name perf -type f 2>/dev/null | head -1) \
-    && if [ -z "$PERF_REAL" ]; then echo "FATAL: perf binary not found under /usr/lib/linux-tools" && exit 1; fi \
-    && cp "$PERF_REAL" /usr/bin/perf \
-    && chmod +x /usr/bin/perf \
-    && perf --version \
+    \
+    # If perf is already on PATH, we're done.
+    && if command -v perf >/dev/null 2>&1; then \
+         perf --version; \
+       else \
+         echo "perf not on PATH, searching..." ; \
+         PERF_REAL="$(find /usr/lib -type f -name perf \
+           \( -path '*/linux-tools/*/perf' -o -path '*/linux-tools-*/*/perf' \) \
+           2>/dev/null | head -n 1)"; \
+         echo "Found perf at: ${PERF_REAL:-<none>}"; \
+         if [ -z "$PERF_REAL" ]; then \
+           echo "FATAL: perf binary not found (searched /usr/lib/linux-tools*/...)" ; \
+           echo "Installed linux-tools packages:" ; \
+           dpkg -l | grep -E '^ii\s+linux-tools' || true ; \
+           exit 1 ; \
+         fi ; \
+         cp "$PERF_REAL" /usr/bin/perf ; \
+         chmod +x /usr/bin/perf ; \
+         perf --version ; \
+       fi \
+    \
     && git clone --branch v1.0 --depth 1 \
         https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+
 
 # Fix CRLF line endings from Windows host and ensure scripts are executable
 RUN find scripts/ -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null; \
