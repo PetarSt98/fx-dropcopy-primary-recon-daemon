@@ -54,6 +54,31 @@ RUN cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREF
 
 CMD ["bash"]
 
+# Profiling image: extends dev with perf, FlameGraph toolkit, and Perl
+# for CPU flame graph generation. Use with privileged: true in compose.
+FROM dev AS profiling
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        linux-tools-common \
+        linux-tools-generic \
+        perl \
+    && rm -rf /var/lib/apt/lists/* \
+    && PERF_REAL=$(find /usr/lib/linux-tools -name perf -type f 2>/dev/null | head -1) \
+    && if [ -z "$PERF_REAL" ]; then echo "FATAL: perf binary not found under /usr/lib/linux-tools" && exit 1; fi \
+    && cp "$PERF_REAL" /usr/bin/perf \
+    && chmod +x /usr/bin/perf \
+    && perf --version \
+    && git clone --branch v1.0 --depth 1 \
+        https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+
+# Fix CRLF line endings from Windows host and ensure scripts are executable
+RUN find scripts/ -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null; \
+    chmod +x scripts/*.sh 2>/dev/null; \
+    true
+
+CMD ["bash"]
+
 # Runtime image: minimal footprint for running the daemon
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive

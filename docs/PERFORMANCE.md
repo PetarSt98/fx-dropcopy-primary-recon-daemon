@@ -75,8 +75,8 @@ firefox docs/performance/flamegraph.svg
 The rate parameter is the **total** system ingress rate, split evenly between the two publishers:
 
 - Total rate 10,000 events/sec → 5,000 per publisher
-- Per-publisher rates ≥ 1,000/sec run in unthrottled mode (`sleep_ms=0`)
-- Per-publisher rates < 1,000/sec use `sleep_ms = 1000 / rate`
+- Per-publisher rates ≥ 500,000/sec run in unthrottled mode (`sleep_us=0`)
+- Per-publisher rates < 500,000/sec use `sleep_us = 1,000,000 / rate` (microsecond pacing)
 
 ### Troubleshooting
 

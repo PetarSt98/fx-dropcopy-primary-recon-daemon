@@ -223,13 +223,13 @@ If CPU usage exceeds expectations:
 
 **Important:** The rate parameter is the TOTAL system ingress rate, split evenly between the two publishers.
 
-The publisher rate is configured via the `sleep_ms` delay used by `fx_aeron_publisher`:
-- For per-publisher rates < 1000/sec: `sleep_ms = 1000 / rate` milliseconds per successful event (the publisher sleeps this long after each send)
-- For per-publisher rates ≥ 1000/sec: `sleep_ms = 0` (no sleep between sends; the publisher runs unthrottled)
+The publisher rate is configured via the `sleep_us` delay (microseconds) used by `fx_aeron_publisher`:
+- For per-publisher rates < 500,000/sec: `sleep_us = 1,000,000 / rate` microseconds per successful event
+- For per-publisher rates ≥ 500,000/sec: `sleep_us = 0` (no sleep between sends; the publisher runs unthrottled)
 
 **Example:** If you specify `10000` events/sec:
 - Each publisher targets 5000 events/sec
-- At 5000/sec per publisher, sleep_ms = 0 (unthrottled mode)
+- At 5000/sec per publisher, sleep_us = 200 (200 microsecond gap between events)
 - Actual rate depends on system capacity and backpressure
 
 The effective rate may vary based on:

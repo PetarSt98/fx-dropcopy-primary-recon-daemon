@@ -63,6 +63,21 @@ services:
       - AERON_DIR=/dev/shm/aeron-root
     shm_size: 256m
 
+  profiling:
+    build:
+      context: .
+      target: profiling
+    image: fx-recon:profiling
+    working_dir: /workspace
+    privileged: true
+    command: ["bash"]
+    environment:
+      - AERON_DIR=/dev/shm/aeron-perf
+    volumes:
+      - .:/host-src
+      - ./docs/performance:/workspace/docs/performance
+    shm_size: 512m
+
 networks:
   recon-net:
     driver: bridge

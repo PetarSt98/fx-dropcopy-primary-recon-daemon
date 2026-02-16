@@ -238,6 +238,7 @@ void Reconciler::run() {
     std::uint64_t last_gap_check_tsc = util::rdtsc();
     const std::uint64_t gap_check_interval_tsc = util::ns_to_tsc(GAP_CHECK_INTERVAL_NS);
 
+
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
 

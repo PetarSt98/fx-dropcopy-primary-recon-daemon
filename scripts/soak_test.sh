@@ -134,10 +134,8 @@ cleanup() {
     # Clean up Aeron directory
     if [[ -z "${AERON_DIR}" ]]; then
         log "Refusing to remove Aeron directory: AERON_DIR is empty"
-    elif [[ "${AERON_DIR}" != /var/tmp/aeron-soak-* ]] && [[ "${AERON_DIR}" != /dev/shm/aeron-soak-* ]]; then
+    elif [[ "${AERON_DIR}" != /var/tmp/aeron-* ]] && [[ "${AERON_DIR}" != /dev/shm/aeron-* ]]; then
         log "Refusing to remove suspicious Aeron directory (unexpected path): ${AERON_DIR}"
-    elif [[ ! -f "${AERON_DIR}/cnc.dat" ]]; then
-        log "Refusing to remove Aeron directory without cnc.dat: ${AERON_DIR}"
     else
         log "Removing Aeron directory: ${AERON_DIR}"
         rm -rf "${AERON_DIR}"
@@ -256,6 +254,15 @@ launch_reconciler() {
     log "Launching reconciler daemon"
     
     export AERON_DIR
+
+    # Keep reconciler alive for the full soak duration when backgrounded.
+    # Without this, std::cin.get() returns EOF immediately because stdin
+    # is closed for backgrounded processes (e.g. in Docker or CI).
+    # Add a 10-minute buffer beyond the test duration.
+    local duration_sec
+    duration_sec=$(bc <<< "scale=0; (${DURATION_HOURS} * 3600 + 0.5) / 1")
+    local run_ms=$(( (duration_sec + 600) * 1000 ))
+    export RECOND_RUN_MS="${run_ms}"
     
     "${FX_EXEC_RECOND}" \
         "${PRIMARY_CHANNEL}" \
@@ -265,7 +272,7 @@ launch_reconciler() {
         > "${RECOND_LOG}" 2>&1 &
     
     RECOND_PID=$!
-    log "Reconciler started (PID ${RECOND_PID})"
+    log "Reconciler started (PID ${RECOND_PID}, RECOND_RUN_MS=${run_ms})"
     
     # Give it time to initialize
     sleep 2
@@ -289,23 +296,18 @@ launch_publisher() {
     # Each publisher gets 50% of the total target rate
     local per_publisher_rate=$((ORDERS_PER_SEC / 2))
     
-    # Calculate sleep_ms to achieve desired rate for moderate/low loads.
-    # The publisher sleeps sleep_ms after each event.
-    # For rates < 1000/sec, calculate sleep_ms = 1000ms / rate
-    #   Example: 100 orders/sec per publisher -> 10ms sleep per event.
-    # NOTE: Because this uses integer division, per-publisher rates in the ~500–999/sec
-    # range will all yield sleep_ms=1, so the effective send rate will be close to
-    # 1000 events/sec regardless of the exact configured rate. For precise control
-    # in that range, adjust ORDERS_PER_SEC downward or rely on unthrottled mode.
-    # For rates >= 1000/sec per publisher, we set sleep_ms=0 (unthrottled).
-    local sleep_ms=0
-    if [[ "${per_publisher_rate}" -lt 1000 ]]; then
-        sleep_ms=$((1000 / per_publisher_rate))
-        if [[ "${per_publisher_rate}" -ge 500 && "${per_publisher_rate}" -lt 1000 ]]; then
-            log "${name}: WARNING: per-publisher rate ${per_publisher_rate}/sec will use sleep_ms=${sleep_ms}ms due to integer division; actual rate will be close to $((1000 / sleep_ms))/sec."
-        fi
+    # Calculate sleep_us (microseconds) to achieve desired rate.
+    # The publisher sleeps sleep_us after each event.
+    #   sleep_us = 1,000,000 / rate
+    #   Example: 5000 orders/sec per publisher -> 200us sleep per event.
+    # For rates >= 500,000/sec per publisher, use unthrottled mode (sleep_us=0)
+    # since sub-2us sleeps are unreliable on most OSes.
+    local sleep_us=0
+    if [[ "${per_publisher_rate}" -lt 500000 ]]; then
+        sleep_us=$((1000000 / per_publisher_rate))
+        log "${name}: per-publisher rate ${per_publisher_rate}/sec, sleep_us=${sleep_us} (effective ~$((1000000 / sleep_us))/sec)"
     else
-        log "${name}: per-publisher rate ${per_publisher_rate}/sec >= 1000, running in unthrottled mode"
+        log "${name}: per-publisher rate ${per_publisher_rate}/sec >= 500k, running in unthrottled mode"
     fi
     
     # Calculate total events for this publisher
@@ -322,7 +324,7 @@ launch_publisher() {
         "${channel}" \
         "${stream}" \
         "${total_events}" \
-        "${sleep_ms}" \
+        "${sleep_us}" \
         > "${log_file}" 2>&1 &
     
     local pid=$!
@@ -459,6 +461,12 @@ print_summary() {
 main() {
     log "Starting soak test"
     log "Duration: ${DURATION_HOURS} hours | Total system rate: ${ORDERS_PER_SEC} events/sec (split across 2 publishers)"
+
+    # Clean stale Aeron state from previous runs
+    if [[ -d "${AERON_DIR}" ]]; then
+        log "Cleaning stale Aeron directory: ${AERON_DIR}"
+        rm -rf "${AERON_DIR}"
+    fi
     
     # Validate executables
     check_executable "${FX_EXEC_RECOND}" "fx_exec_recond"
@@ -578,8 +586,11 @@ main() {
     log "Expected: ${expected_total} events (Primary: ${PRIMARY_EXPECTED_EVENTS}, Dropcopy: ${DROPCOPY_EXPECTED_EVENTS})"
     log "Processed: ${processed_total} events (Internal: ${internal}, Dropcopy: ${dropcopy})"
     
-    # Allow small tolerance for in-flight events during shutdown
-    local drop_tolerance=100
+    # Allow tolerance for in-flight events during shutdown and Aeron UDP transport.
+    # UDP loopback can drop packets under burst load (kernel receive buffer overflow).
+    # Use 0.2% of expected total or 100, whichever is larger.
+    local pct_tolerance=$((expected_total / 500))
+    local drop_tolerance=$(( pct_tolerance > 100 ? pct_tolerance : 100 ))
     local drops=$((expected_total - processed_total))
     
     if (( drops > drop_tolerance )); then
