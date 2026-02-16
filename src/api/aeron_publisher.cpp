@@ -102,8 +102,9 @@ int main(int argc, char** argv) {
 
     // Pre-generate events upfront to keep std::to_string allocation out of
     // the hot loop. Cap at 100k to avoid OOM on long soak tests (e.g. 18M events).
-    // The OrderStateStore now handles high tombstone density via periodic
-    // compaction, so the pre-generated count is not constrained by store capacity.
+    // The OrderStateStore now uses backward-shift deletion (no tombstones),
+    // and relies on a freelist for memory reuse, so the pre-generated count
+    // is not constrained by store capacity.
     constexpr std::size_t max_pregenerated = 100000;
     const std::size_t pregenerate_count = count < max_pregenerated ? count : max_pregenerated;
 

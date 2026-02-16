@@ -193,6 +193,8 @@ cleanup() {
         log "Refusing to remove Aeron directory: AERON_DIR is empty"
     elif [[ "${AERON_DIR}" != /dev/shm/aeron-perf* ]]; then
         log "Refusing to remove suspicious Aeron directory (unexpected path): ${AERON_DIR}"
+    elif [[ ! -f "${AERON_DIR}/cnc.dat" ]]; then
+        log "Refusing to remove Aeron directory: cnc.dat not found in ${AERON_DIR}"
     else
         log "Removing Aeron directory: ${AERON_DIR}"
         rm -rf "${AERON_DIR}"

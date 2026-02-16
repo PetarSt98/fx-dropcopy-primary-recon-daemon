@@ -26,6 +26,8 @@ namespace core {
 //   is cached in a freelist for O(1) reuse by the next upsert.
 class OrderStateStore {
 public:
+    // May throw std::invalid_argument on an unusable capacity_hint or
+    // std::runtime_error if the bucket sizing overflows at construction time.
     OrderStateStore(util::Arena& arena, std::size_t capacity_hint);
 
     OrderStateStore(const OrderStateStore&) = delete;

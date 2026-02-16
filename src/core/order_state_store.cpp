@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include "util/perf_macros.hpp"
 
 namespace core {
@@ -45,6 +46,13 @@ OrderStateStore::OrderStateStore(util::Arena& arena, std::size_t capacity_hint)
 // Recycled OrderState slots are linked via an intrusive singly-linked list
 // stored in the first sizeof(pointer) bytes of the OrderState memory.
 // ---------------------------------------------------------------------------
+
+// Verify that OrderState alignment is compatible with storing a pointer.
+// OrderState has uint64_t members, so it should have at least 8-byte alignment.
+static_assert(alignof(OrderState) >= alignof(OrderState*),
+              "OrderState alignment must be >= pointer alignment for freelist");
+static_assert(sizeof(OrderState) >= sizeof(OrderState*),
+              "OrderState size must be >= pointer size for freelist");
 
 OrderState* OrderStateStore::alloc_state(OrderKey key) noexcept {
     OrderState* st = nullptr;
