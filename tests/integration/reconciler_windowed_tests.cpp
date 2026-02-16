@@ -960,12 +960,13 @@ TEST_F(ReconcilerWindowedTest, E2E_TerminalOrdersAreRecycled) {
     // Process 10 orders: Primary Filled, then DropCopy Filled (matching)
     for (int i = 0; i < 10; ++i) {
         const std::string cid = "E2E_ORD" + std::to_string(i);
+        const std::string eid = "EID" + std::to_string(i);
         auto primary = make_event(Source::Primary, OrdStatus::Filled, 100 * (i + 1), 5000,
-                                  ns_to_tsc(i * 1'000'000), cid.c_str(), seq++);
+                                  ns_to_tsc(i * 1'000'000), cid.c_str(), seq++, eid.c_str());
         reconciler.process_event_for_test(primary);
 
         auto dropcopy = make_event(Source::DropCopy, OrdStatus::Filled, 100 * (i + 1), 5000,
-                                   ns_to_tsc(i * 1'000'000 + 500'000), cid.c_str(), seq++);
+                                   ns_to_tsc(i * 1'000'000 + 500'000), cid.c_str(), seq++, eid.c_str());
         reconciler.process_event_for_test(dropcopy);
     }
 
@@ -1031,9 +1032,9 @@ TEST_F(ReconcilerWindowedTest, E2E_OrderRecycledAfterFullLifecycle) {
 
     // Step 1: New order on both sides
     auto p1 = make_event(Source::Primary, OrdStatus::New, 0, 5000,
-                         ns_to_tsc(0), "LIFECYCLE1", seq++);
+                         ns_to_tsc(0), "LIFECYCLE1", seq++, "EID_NEW");
     auto d1 = make_event(Source::DropCopy, OrdStatus::New, 0, 5000,
-                         ns_to_tsc(1'000'000), "LIFECYCLE1", seq++);
+                         ns_to_tsc(1'000'000), "LIFECYCLE1", seq++, "EID_NEW");
     reconciler.process_event_for_test(p1);
     reconciler.process_event_for_test(d1);
 
@@ -1042,9 +1043,9 @@ TEST_F(ReconcilerWindowedTest, E2E_OrderRecycledAfterFullLifecycle) {
 
     // Step 2: Working on both sides
     auto p2 = make_event(Source::Primary, OrdStatus::Working, 0, 5000,
-                         ns_to_tsc(2'000'000), "LIFECYCLE1", seq++);
+                         ns_to_tsc(2'000'000), "LIFECYCLE1", seq++, "EID_WRK");
     auto d2 = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
-                         ns_to_tsc(3'000'000), "LIFECYCLE1", seq++);
+                         ns_to_tsc(3'000'000), "LIFECYCLE1", seq++, "EID_WRK");
     reconciler.process_event_for_test(p2);
     reconciler.process_event_for_test(d2);
 
@@ -1052,9 +1053,9 @@ TEST_F(ReconcilerWindowedTest, E2E_OrderRecycledAfterFullLifecycle) {
 
     // Step 3: Filled on both sides -> terminal + matched -> recycled
     auto p3 = make_event(Source::Primary, OrdStatus::Filled, 100, 5000,
-                         ns_to_tsc(4'000'000), "LIFECYCLE1", seq++);
+                         ns_to_tsc(4'000'000), "LIFECYCLE1", seq++, "EID_FILL");
     auto d3 = make_event(Source::DropCopy, OrdStatus::Filled, 100, 5000,
-                         ns_to_tsc(5'000'000), "LIFECYCLE1", seq++);
+                         ns_to_tsc(5'000'000), "LIFECYCLE1", seq++, "EID_FILL");
     reconciler.process_event_for_test(p3);
     reconciler.process_event_for_test(d3);
 
