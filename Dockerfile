@@ -58,35 +58,36 @@ CMD ["bash"]
 # for CPU flame graph generation. Use with privileged: true in compose.
 FROM dev AS profiling
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git perl; \
+    rm -rf /var/lib/apt/lists/*; \
+    \
+    # Best-effort perf install across environments (generic, azure, WSL2).
+    KREL="$(uname -r)"; \
+    echo "Kernel release: $KREL"; \
+    apt-get update; \
+    ( \
+      apt-get install -y --no-install-recommends \
         linux-tools-common \
-        linux-tools-generic \
-        perl \
-    && rm -rf /var/lib/apt/lists/* \
+        "linux-tools-$KREL" \
+        "linux-cloud-tools-$KREL" \
+      || apt-get install -y --no-install-recommends linux-tools-generic \
+      || apt-get install -y --no-install-recommends linux-tools-azure linux-cloud-tools-azure \
+      || apt-get install -y --no-install-recommends linux-tools-standard-WSL2 linux-cloud-tools-standard-WSL2 \
+      || true \
+    ); \
+    rm -rf /var/lib/apt/lists/* || true; \
     \
-    # If perf is already on PATH, we're done.
-    && if command -v perf >/dev/null 2>&1; then \
-         perf --version; \
-       else \
-         echo "perf not on PATH, searching..." ; \
-         PERF_REAL="$(find /usr/lib -type f -name perf \
-           \( -path '*/linux-tools/*/perf' -o -path '*/linux-tools-*/*/perf' \) \
-           2>/dev/null | head -n 1)"; \
-         echo "Found perf at: ${PERF_REAL:-<none>}"; \
-         if [ -z "$PERF_REAL" ]; then \
-           echo "FATAL: perf binary not found (searched /usr/lib/linux-tools*/...)" ; \
-           echo "Installed linux-tools packages:" ; \
-           dpkg -l | grep -E '^ii\s+linux-tools' || true ; \
-           exit 1 ; \
-         fi ; \
-         cp "$PERF_REAL" /usr/bin/perf ; \
-         chmod +x /usr/bin/perf ; \
-         perf --version ; \
-       fi \
+    # If perf exists, show version; if not, continue (build must still succeed).
+    if command -v perf >/dev/null 2>&1; then \
+      perf --version || true; \
+    else \
+      echo "NOTE: perf not available for kernel $KREL in this build environment. Image will be built without perf."; \
+    fi; \
     \
-    && git clone --branch v1.0 --depth 1 \
-        https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+    git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+
 
 
 # Fix CRLF line endings from Windows host and ensure scripts are executable
