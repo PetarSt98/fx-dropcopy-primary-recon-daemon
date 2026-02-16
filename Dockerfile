@@ -60,14 +60,10 @@ FROM dev AS profiling
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        linux-tools-common \
-        linux-tools-generic \
+        linux-perf \
         perl \
     && rm -rf /var/lib/apt/lists/* \
-    && PERF_REAL=$(find /usr/lib/linux-tools -name perf -type f 2>/dev/null | head -1) \
-    && if [ -z "$PERF_REAL" ]; then echo "FATAL: perf binary not found under /usr/lib/linux-tools" && exit 1; fi \
-    && cp "$PERF_REAL" /usr/bin/perf \
-    && chmod +x /usr/bin/perf \
+    && ln -sf /usr/bin/perf_* /usr/bin/perf \
     && perf --version \
     && git init tools/FlameGraph \
     && cd tools/FlameGraph \
