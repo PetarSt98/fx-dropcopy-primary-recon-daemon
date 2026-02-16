@@ -62,6 +62,9 @@ readonly FX_AERON_PUBLISHER="${BUILD_DIR}/fx_aeron_publisher"
 # Warmup before profiling (seconds)
 readonly WARMUP_SECS=5
 
+# Extra buffer so publishers outlast the profiling window (seconds)
+readonly PUBLISHER_BUFFER_SECS=10
+
 # PID tracking
 MEDIA_DRIVER_PID=""
 RECOND_PID=""
@@ -263,7 +266,7 @@ launch_publisher() {
     fi
 
     # Calculate total events for this publisher over the profiling + warmup duration
-    local total_duration=$((DURATION_SECS + WARMUP_SECS + 10))
+    local total_duration=$((DURATION_SECS + WARMUP_SECS + PUBLISHER_BUFFER_SECS))
     local total_events=$((per_publisher_rate * total_duration))
 
     export AERON_DIR
