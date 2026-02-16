@@ -15,8 +15,8 @@ The `generate_flamegraph.sh` script profiles the FX reconciliation daemon under 
 
 **Setup:**
 ```bash
-# Clone FlameGraph toolkit (one-time setup)
-git clone https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+# Clone FlameGraph toolkit pinned to v1.0 (one-time setup)
+git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
 
 # Build project in release mode
 cmake --preset release
@@ -64,7 +64,7 @@ firefox docs/performance/flamegraph.svg
 ### How It Works
 
 1. Launches Aeron MediaDriver, reconciler, and two publishers (primary + dropcopy)
-2. Allows a 5-second warmup period for caches and JIT to stabilize
+2. Allows a 5-second warmup period for CPU caches and branch prediction to stabilize
 3. Records CPU profile using `perf record -F 999 -g` on the reconciler process
 4. Generates SVG flame graph using the FlameGraph toolkit
 5. Produces text reports for quick analysis
@@ -87,7 +87,7 @@ sudo apt-get install linux-tools-common linux-tools-$(uname -r)
 
 **FlameGraph toolkit not found:**
 ```bash
-git clone https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
 ```
 
 **Permission denied for `perf record`:**

@@ -433,8 +433,8 @@ Generate CPU flame graphs to identify hot spots in the reconciler. See the
 [Performance Guide](docs/PERFORMANCE.md) for details:
 
 ```bash
-# Clone FlameGraph toolkit (one-time setup)
-git clone https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+# Clone FlameGraph toolkit pinned to v1.0 (one-time setup)
+git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
 
 # Generate flame graph (60s profile at 10k events/sec)
 ./scripts/generate_flamegraph.sh 60 10000

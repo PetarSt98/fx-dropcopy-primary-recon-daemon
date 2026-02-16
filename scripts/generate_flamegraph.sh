@@ -170,7 +170,7 @@ validate_dependencies() {
 
     # Check FlameGraph toolkit
     if [[ ! -x "${FLAMEGRAPH_DIR}/stackcollapse-perf.pl" ]]; then
-        error "FlameGraph toolkit not found at ${FLAMEGRAPH_DIR}. Install with: git clone https://github.com/brendangregg/FlameGraph.git tools/FlameGraph"
+        error "FlameGraph toolkit not found at ${FLAMEGRAPH_DIR}. Install with: git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph"
     fi
 
     if [[ ! -x "${FLAMEGRAPH_DIR}/flamegraph.pl" ]]; then
