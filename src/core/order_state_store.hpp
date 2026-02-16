@@ -29,11 +29,13 @@ public:
 
     OrderState* upsert(const ExecEvent& ev) noexcept;
     OrderState* find(OrderKey key) noexcept;
+    void recycle(OrderKey key) noexcept;
     void reset_epoch() noexcept;
 
     std::size_t bucket_count() const noexcept { return bucket_count_; }
     std::size_t size() const noexcept { return size_; }
     std::size_t overflow_count() const noexcept { return overflow_count_; }
+    std::size_t recycled_count() const noexcept { return recycled_count_; }
 
 private:
     // Sentinel key marking an empty bucket. make_order_key is allowed to produce 0,
@@ -51,6 +53,7 @@ private:
     std::size_t bucket_count_{0};
     std::size_t size_{0};
     std::size_t overflow_count_{0};
+    std::size_t recycled_count_{0};
     std::size_t max_probe_{0};
 };
 

@@ -109,4 +109,115 @@ TEST_F(OrderStateStoreTest, OverflowPath) {
     EXPECT_GE(store.overflow_count(), failed_inserts);
 }
 
+TEST_F(OrderStateStoreTest, RecycleRemovesOrder) {
+    core::OrderStateStore store(arena_, 128);
+
+    const auto ev = make_event("RECYCLE1");
+    const auto key = core::make_order_key(ev);
+
+    core::OrderState* st = store.upsert(ev);
+    ASSERT_NE(st, nullptr);
+    EXPECT_EQ(store.size(), 1u);
+    EXPECT_EQ(store.recycled_count(), 0u);
+
+    store.recycle(key);
+
+    EXPECT_EQ(store.size(), 0u);
+    EXPECT_EQ(store.recycled_count(), 1u);
+    EXPECT_EQ(store.find(key), nullptr);
+}
+
+TEST_F(OrderStateStoreTest, RecycleNonExistentKeyIsNoOp) {
+    core::OrderStateStore store(arena_, 128);
+
+    const auto ev = make_event("EXISTS1");
+    store.upsert(ev);
+    EXPECT_EQ(store.size(), 1u);
+
+    // Recycle a key that doesn't exist
+    const auto other_ev = make_event("NOTEXIST");
+    const auto other_key = core::make_order_key(other_ev);
+    store.recycle(other_key);
+
+    EXPECT_EQ(store.size(), 1u);
+    EXPECT_EQ(store.recycled_count(), 0u);
+}
+
+TEST_F(OrderStateStoreTest, RecycleEmptyKeyIsNoOp) {
+    core::OrderStateStore store(arena_, 128);
+
+    const auto ev = make_event("EMPTYKEY");
+    store.upsert(ev);
+    EXPECT_EQ(store.size(), 1u);
+
+    // empty_key_ is numeric_limits<OrderKey>::max()
+    store.recycle(std::numeric_limits<core::OrderKey>::max());
+
+    EXPECT_EQ(store.size(), 1u);
+    EXPECT_EQ(store.recycled_count(), 0u);
+}
+
+TEST_F(OrderStateStoreTest, RecycleAllowsReinsert) {
+    core::OrderStateStore store(arena_, 128);
+
+    const auto ev = make_event("REINSERT");
+    const auto key = core::make_order_key(ev);
+
+    core::OrderState* st1 = store.upsert(ev);
+    ASSERT_NE(st1, nullptr);
+
+    store.recycle(key);
+    EXPECT_EQ(store.find(key), nullptr);
+
+    // Re-insert same key - should get a new OrderState
+    core::OrderState* st2 = store.upsert(ev);
+    ASSERT_NE(st2, nullptr);
+    EXPECT_EQ(store.size(), 1u);
+    EXPECT_EQ(store.find(key), st2);
+}
+
+TEST_F(OrderStateStoreTest, RecycleMultipleOrders) {
+    core::OrderStateStore store(arena_, 128);
+
+    std::vector<core::ExecEvent> events;
+    std::vector<core::OrderKey> keys;
+    for (int i = 0; i < 5; ++i) {
+        auto ev = make_event("MULTI" + std::to_string(i));
+        events.push_back(ev);
+        keys.push_back(core::make_order_key(ev));
+        ASSERT_NE(store.upsert(ev), nullptr);
+    }
+    EXPECT_EQ(store.size(), 5u);
+
+    // Recycle orders 0, 2, 4
+    store.recycle(keys[0]);
+    store.recycle(keys[2]);
+    store.recycle(keys[4]);
+
+    EXPECT_EQ(store.size(), 2u);
+    EXPECT_EQ(store.recycled_count(), 3u);
+
+    EXPECT_EQ(store.find(keys[0]), nullptr);
+    EXPECT_NE(store.find(keys[1]), nullptr);
+    EXPECT_EQ(store.find(keys[2]), nullptr);
+    EXPECT_NE(store.find(keys[3]), nullptr);
+    EXPECT_EQ(store.find(keys[4]), nullptr);
+}
+
+TEST_F(OrderStateStoreTest, RecycledCountAccumulates) {
+    core::OrderStateStore store(arena_, 128);
+
+    for (int i = 0; i < 3; ++i) {
+        const auto ev = make_event("ACC" + std::to_string(i));
+        store.upsert(ev);
+    }
+    EXPECT_EQ(store.recycled_count(), 0u);
+
+    for (int i = 0; i < 3; ++i) {
+        const auto ev = make_event("ACC" + std::to_string(i));
+        store.recycle(core::make_order_key(ev));
+    }
+    EXPECT_EQ(store.recycled_count(), 3u);
+}
+
 } // namespace

@@ -935,5 +935,133 @@ TEST_F(ReconcilerWindowedTest, GapClosesOnOutOfOrderMessage) {
     // The sequence tracker's gap_open should now be false (gap closed)
 }
 
+// ============================================================================
+// Test: Order recycling end-to-end through the reconciler
+// ============================================================================
+TEST_F(ReconcilerWindowedTest, E2E_TerminalOrdersAreRecycled) {
+    ReconConfig config;
+    config.grace_period_ns = 500'000'000;  // 500ms
+    config.enable_windowed_recon = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    std::uint64_t seq = 1;
+
+    // Process 10 orders: Primary Filled, then DropCopy Filled (matching)
+    for (int i = 0; i < 10; ++i) {
+        const std::string cid = "E2E_ORD" + std::to_string(i);
+        auto primary = make_event(Source::Primary, OrdStatus::Filled, 100 * (i + 1), 5000,
+                                  ns_to_tsc(i * 1'000'000), cid.c_str(), seq++);
+        reconciler.process_event_for_test(primary);
+
+        auto dropcopy = make_event(Source::DropCopy, OrdStatus::Filled, 100 * (i + 1), 5000,
+                                   ns_to_tsc(i * 1'000'000 + 500'000), cid.c_str(), seq++);
+        reconciler.process_event_for_test(dropcopy);
+    }
+
+    // All 10 orders should be matched and recycled
+    EXPECT_EQ(counters_.orders_recycled, 10u);
+    EXPECT_EQ(store.recycled_count(), 10u);
+    EXPECT_EQ(store.size(), 0u);
+
+    // No divergences should be emitted
+    EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
+}
+
+TEST_F(ReconcilerWindowedTest, E2E_NonTerminalOrdersNotRecycled) {
+    ReconConfig config;
+    config.grace_period_ns = 500'000'000;
+    config.enable_windowed_recon = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    // Send matching Working events (non-terminal)
+    auto primary = make_event(Source::Primary, OrdStatus::Working, 0, 5000,
+                              ns_to_tsc(0), "WORK1", 1);
+    reconciler.process_event_for_test(primary);
+
+    auto dropcopy = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
+                               ns_to_tsc(10'000'000), "WORK1", 1);
+    reconciler.process_event_for_test(dropcopy);
+
+    // Order matched but not terminal -> should NOT be recycled
+    EXPECT_EQ(counters_.orders_matched, 1u);
+    EXPECT_EQ(counters_.orders_recycled, 0u);
+    EXPECT_EQ(store.size(), 1u);
+}
+
+TEST_F(ReconcilerWindowedTest, E2E_OrderRecycledAfterFullLifecycle) {
+    ReconConfig config;
+    config.grace_period_ns = 500'000'000;
+    config.enable_windowed_recon = true;
+
+    util::Arena arena{util::Arena::default_capacity_bytes};
+    OrderStateStore store{arena, 1024};
+    auto primary_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto dropcopy_ring = std::make_unique<ingest::SpscRing<ExecEvent, 1u << 16>>();
+    auto divergence_ring = std::make_unique<DivergenceRing>();
+    auto seq_gap_ring = std::make_unique<SequenceGapRing>();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(0);
+
+    Reconciler reconciler(stop_flag_, *primary_ring, *dropcopy_ring, store,
+                          counters_, *divergence_ring, *seq_gap_ring,
+                          timer_wheel.get(), config);
+
+    std::uint64_t seq = 1;
+
+    // Step 1: New order on both sides
+    auto p1 = make_event(Source::Primary, OrdStatus::New, 0, 5000,
+                         ns_to_tsc(0), "LIFECYCLE1", seq++);
+    auto d1 = make_event(Source::DropCopy, OrdStatus::New, 0, 5000,
+                         ns_to_tsc(1'000'000), "LIFECYCLE1", seq++);
+    reconciler.process_event_for_test(p1);
+    reconciler.process_event_for_test(d1);
+
+    EXPECT_EQ(counters_.orders_recycled, 0u);
+    EXPECT_EQ(store.size(), 1u);
+
+    // Step 2: Working on both sides
+    auto p2 = make_event(Source::Primary, OrdStatus::Working, 0, 5000,
+                         ns_to_tsc(2'000'000), "LIFECYCLE1", seq++);
+    auto d2 = make_event(Source::DropCopy, OrdStatus::Working, 0, 5000,
+                         ns_to_tsc(3'000'000), "LIFECYCLE1", seq++);
+    reconciler.process_event_for_test(p2);
+    reconciler.process_event_for_test(d2);
+
+    EXPECT_EQ(counters_.orders_recycled, 0u);
+
+    // Step 3: Filled on both sides -> terminal + matched -> recycled
+    auto p3 = make_event(Source::Primary, OrdStatus::Filled, 100, 5000,
+                         ns_to_tsc(4'000'000), "LIFECYCLE1", seq++);
+    auto d3 = make_event(Source::DropCopy, OrdStatus::Filled, 100, 5000,
+                         ns_to_tsc(5'000'000), "LIFECYCLE1", seq++);
+    reconciler.process_event_for_test(p3);
+    reconciler.process_event_for_test(d3);
+
+    // Now both sides terminal and matched -> recycled
+    EXPECT_EQ(counters_.orders_recycled, 1u);
+    EXPECT_EQ(store.size(), 0u);
+}
+
 } // namespace test
 } // namespace core

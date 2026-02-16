@@ -107,6 +107,33 @@ OrderState* OrderStateStore::find(OrderKey key) noexcept {
     return nullptr;
 }
 
+void OrderStateStore::recycle(OrderKey key) noexcept {
+    if (key == empty_key_) {
+        return;
+    }
+
+    const std::size_t start = hash(key) & mask();
+    std::size_t idx = start;
+
+    for (std::size_t probe = 0; probe < max_probe_; ++probe) {
+        const OrderKey bucket_key = keys_[idx];
+
+        if (bucket_key == key) {
+            keys_[idx] = empty_key_;
+            values_[idx] = nullptr;
+            --size_;
+            ++recycled_count_;
+            return;
+        }
+
+        if (bucket_key == empty_key_) {
+            return;
+        }
+
+        idx = (idx + 1) & mask();
+    }
+}
+
 void OrderStateStore::reset_epoch() noexcept {
     arena_.reset();
     std::fill_n(keys_.get(), bucket_count_, empty_key_);

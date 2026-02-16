@@ -209,6 +209,15 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         }
     }
 
+    // Recycle terminal orders: removes from hash table but does NOT reclaim
+    // arena memory (memory is reclaimed in bulk at end-of-day via reset_epoch()).
+    if (is_recyclable(*st)) {
+        store_.recycle(st->key);
+        ++counters_.orders_recycled;
+        // 'st' is now dangling - do NOT access after this point
+        return;
+    }
+
     // End-to-end latency: from Aeron ingest timestamp to reconciliation complete.
     // Covers ring transit time + full process_event() work.
     PERF_IF_ENABLED({
@@ -440,6 +449,12 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
     emit_confirmed_divergence(*os, mismatch, now);
     ++counters_.mismatch_confirmed;
 }
+
+    // After handling expiry, check if order can now be recycled
+    if (is_recyclable(*os)) {
+        store_.recycle(os->key);
+        ++counters_.orders_recycled;
+    }
 }
 
 void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch,
