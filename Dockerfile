@@ -60,7 +60,7 @@ FROM dev AS profiling
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends git perl; \
+    apt-get install -y --no-install-recommends git perl bc; \
     rm -rf /var/lib/apt/lists/*; \
     \
     # Best-effort perf install across environments (generic, azure, WSL2).
