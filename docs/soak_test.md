@@ -248,19 +248,8 @@ The soak test handles:
 - `SIGTERM`: Graceful shutdown
 - `EXIT`: Cleanup trap always runs
 
-## Future Enhancements
-
-Potential improvements for FX-7063 and beyond:
-
-1. **CPU Profiling**: Integrated perf/flamegraph generation
-2. **Memory Profiling**: Automatic heaptrack integration
-3. **Distributed Testing**: Multi-host publisher support
-4. **Cloud Deployment**: Kubernetes/Docker Compose orchestration
-5. **Advanced Analytics**: Latency percentiles, tail latency analysis
-
 ## References
 
-- Main README: `../README.md`
-- Logging Audit: `./logging_audit.md`
-- Issue: FX-7062 (24-Hour Soak Test & Stability Validation)
-- Next: FX-7063 (CPU Profiling & Flame Graph Generation)
+- Main README: [`../README.md`](../README.md)
+- Performance Analysis (includes soak test results): [`./PERFORMANCE.md`](PERFORMANCE.md)
+- Design Journal: [`./DESIGN_JOURNAL.md`](DESIGN_JOURNAL.md)

@@ -288,7 +288,61 @@ Testing & validation:
       - measure max sustainable throughput before queues saturate
 
 
-8. Status
+8. Performance Characteristics
+------------------------------
+
+### Microbenchmark Results
+
+Measured with Google Benchmark (`FX_PERF_ENABLED=OFF`, 5 repetitions per benchmark).
+
+| Component | Mean | Median | StdDev |
+|-----------|------|--------|--------|
+| Arena Allocate | 0.73 ns | 0.73 ns | 0.01 ns |
+| Compute Mismatch | 0.94 ns | 0.94 ns | 0.00 ns |
+| Hash Lookup (first probe) | 0.93 ns | 0.89 ns | 0.06 ns |
+| Hash Lookup (90% load) | 6.35 ns | 6.35 ns | 0.06 ns |
+| Hash Upsert | 65.50 ns | 65.90 ns | 1.15 ns |
+| SPSC Ring Pop | 6.64 ns | 6.75 ns | 0.37 ns |
+| SPSC Ring Push | 6.69 ns | 6.78 ns | 0.62 ns |
+| SPSC Ring Push+Pop | 8.97 ns | 9.12 ns | 0.29 ns |
+| Timer Wheel Schedule | 4.30 ns | 4.27 ns | 0.07 ns |
+
+### Latency Distribution (instrumented, 50K iterations)
+
+| Metric | P50 | P99 | P99.9 |
+|--------|-----|-----|-------|
+| End-to-End Latency | 196 ns | 379 ns | 1,007 ns |
+| Reconciler Process Event | 245 ns | 535 ns | 858 ns |
+| Hash Table Upsert | 54 ns | 289 ns | 330 ns |
+| Hash Table Lookup | 18 ns | 20 ns | 25 ns |
+| Timer Wheel Schedule | 13 ns | 15 ns | 15 ns |
+| Arena Allocate | 10 ns | 15 ns | 28 ns |
+| SPSC Ring Push | 13 ns | 15 ns | 15 ns |
+| SPSC Ring Pop | 10 ns | 13 ns | 13 ns |
+| Mismatch Compute | 10 ns | 15 ns | 25 ns |
+
+### Soak Test (20K events/sec, 5 minutes)
+
+- ✅ **5,980,000 events** processed (Primary: 2,990,000 + Dropcopy: 2,990,000)
+- ✅ **Zero crashes**, zero drops — all events accounted for
+- Memory: Initial 557 MB → Final 647 MB (RSS)
+
+### CPU Flame Graph
+
+The interactive flame graph from a 300-second `perf record` session (2M samples) is available at
+[`docs/performance/flamegraph.svg`](docs/performance/flamegraph.svg). Top hot spots:
+
+| Function | % CPU |
+|----------|-------|
+| `OrderStateStore::find` | 15.80% |
+| `OrderStateStore::upsert` | 3.44% |
+| `OrderStateStore::alloc_state` | 3.17% |
+
+Full performance report → [docs/PERFORMANCE.md](docs/PERFORMANCE.md)
+Design decisions → [docs/DESIGN_JOURNAL.md](docs/DESIGN_JOURNAL.md)
+
+
+9. Status
 ---------
 
 This repository is being developed as a production-style, educational project for FX/HFT infrastructure engineering:
@@ -304,8 +358,8 @@ Planned milestones:
   - v1.0 – End-to-end, production-style daemon with query/CLI interface.
 
 
-9. Why This Project Exists
---------------------------
+10. Why This Project Exists
+---------------------------
 
 The goal of this repository is to:
 
@@ -320,8 +374,8 @@ The goal of this repository is to:
 It is intentionally not a toy matching engine or generic simulator; it focuses on a real, essential piece of infrastructure that serious FX trading firms actually need to get right.
 
 
-10. Containerized build and runtime
------------------------------------
+11. Containerized build and runtime
+------------------------------------
 
 The repository ships with a multi-stage `Dockerfile` that builds Aeron and the
 reconciliation binaries, plus a `docker-compose.yml` that co-locates an Aeron
@@ -347,8 +401,8 @@ docker compose up --build
 Tweak the Aeron channel endpoints/stream IDs in `docker-compose.yml` to match
 your environment or venue connectivity.
 
-11. Running tests locally (PowerShell or Bash)
----------------------------------------------
+12. Running tests locally (PowerShell or Bash)
+----------------------------------------------
 
 **Local Aeron dependency for non-Docker builds**
 

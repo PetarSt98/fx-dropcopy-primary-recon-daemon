@@ -1,0 +1,77 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 2M of event 'cpu-clock:pppH'
+# Event count (approx.): 475978776720
+#
+# Overhead  Command          Shared Object         Symbol                                                                                          
+# ........  ...............  ....................  ................................................................................................
+#
+    15.80%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::find
+            |
+            ---core::OrderStateStore::find
+               |          
+                --2.12%--0x55a347c29060
+                          0x55a347b29050
+
+    14.58%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Push
+            |
+            ---BM_SPSCRing_Push
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+    13.24%  reconciler_benc  libgcc_s.so.1         [.] __udivti3
+            |
+            ---__udivti3
+               |          
+               |--6.54%--benchmark::internal::BenchmarkInstance::Run
+               |          benchmark::internal::(anonymous namespace)::RunInThread
+               |          
+                --2.39%--0
+
+    12.70%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Pop
+            |
+            ---BM_SPSCRing_Pop
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+     8.65%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_PushPop
+            |
+            ---BM_SPSCRing_PushPop
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+     7.98%  reconciler_benc  reconciler_bench      [.] BM_TimerWheelSchedule
+            |
+            ---BM_TimerWheelSchedule
+
+     6.80%  reconciler_benc  reconciler_bench      [.] BM_ArenaAllocate
+            |
+            ---BM_ArenaAllocate
+               0
+
+     6.57%  reconciler_benc  reconciler_bench      [.] BM_ComputeMismatch
+            |
+            ---BM_ComputeMismatch
+               0
+
+     3.44%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::upsert
+            |
+            ---core::OrderStateStore::upsert
+               |          
+                --0.58%--0x55a347d29470
+                          0x55a347b29460
+
+     3.17%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::alloc_state
+            |
+            ---core::OrderStateStore::alloc_state
+
+     0.98%  reconciler_benc  libc.so.6             [.] _IO_default_xsputn
+            |
+            ---_IO_default_xsputn
+
+     0.94%  reconciler_benc  reconciler_bench      [.] 0x0000000000006a10
+            |
+            ---0x55a344541a10
