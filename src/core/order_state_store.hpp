@@ -14,13 +14,14 @@ namespace core {
 // OrderStateStore is a single-writer, open-addressed hash table keyed by OrderKey.
 // The reconciler thread is the only writer; future readers will be read-only.
 //
-// Deletion strategy: tombstoning with bounded linear probing (max_probe_ = 256).
+// Deletion strategy: tombstoning with bounded linear probing (max_probe_ ≤ 256,
+//   specifically max_probe_ = min(bucket_count_, 256)).
 //   When an entry is recycled, the key slot is marked with tombstone_key_ sentinel.
 //   Tombstones preserve probe chain integrity (find() skips over them) while allowing
 //   upsert() to reuse the slot. This gives O(1) deletion without probe-chain fixup.
-//   The probe limit of 256 steps (vs original 64) handles tombstone clustering under
-//   sustained high-load scenarios, preventing event drops while maintaining bounded
-//   worst-case latency (~768ns for 256 probes).
+//   The probe limit of up to 256 steps (vs original 64) handles tombstone clustering
+//   under sustained high-load scenarios, preventing event drops while maintaining
+//   bounded worst-case latency (~768ns for 256 probes).
 //
 // Memory: OrderState instances are allocated from the provided Arena (append-only,
 //   bulk reset via reset_epoch()). On recycle, the OrderState* is returned to an
