@@ -44,7 +44,7 @@ public:
 
 private:
     // Sentinel values for key slots. These reserve the top two OrderKey values.
-    // In practice, FNV-1a hash collisions with these sentinels are astronomically
+    // In practice, hash collisions with these sentinels are astronomically
     // unlikely (1 in 2^64 for any single key, negligible at 400M orders/day scale).
     // If a collision occurs, overflow_count_ increments and the order is dropped.
     static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();

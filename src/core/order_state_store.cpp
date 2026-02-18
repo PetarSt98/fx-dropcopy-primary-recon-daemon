@@ -112,9 +112,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
             }
         } else if (k == empty_key_) {
             // Empty slot or we can reuse a tombstone we saw earlier
-            const std::size_t insert_idx = (first_tombstone != bucket_count_) 
-                                            ? first_tombstone 
-                                            : idx;
+            const std::size_t insert_idx = (first_tombstone != bucket_count_) ? first_tombstone : idx;
             
             OrderState* st = alloc_state(key);
             if (!st) {
@@ -187,7 +185,6 @@ void OrderStateStore::reset_epoch() noexcept {
     std::fill_n(values_.get(), bucket_count_, nullptr);
     size_ = 0;
     overflow_count_ = 0;
-    recycled_count_ = 0;
     free_head_ = nullptr;
 }
 
