@@ -7,6 +7,9 @@
 
 namespace core {
 
+// Probe limit: caps worst-case search at 64 steps to bound tail latency.
+// At typical load factors (< 50%), average probe length is ~1.5-2.0.
+// 64 steps covers 99.9%+ of queries while preventing full-table scans.
 static constexpr std::size_t default_probe_limit = 64;
 
 std::size_t OrderStateStore::next_power_of_two(std::size_t v) {
@@ -96,7 +99,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
 
     const std::size_t m = mask();
     std::size_t idx = hash(key) & m;
-    std::size_t first_tombstone = bucket_count_;  // Sentinel: no tombstone seen yet
+    std::size_t first_tombstone = bucket_count_;  // Sentinel: no tombstone found yet
 
     for (std::size_t probe = 0; probe < max_probe_; ++probe) {
         const OrderKey k = keys_[idx];
@@ -111,7 +114,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
                 first_tombstone = idx;
             }
         } else if (k == empty_key_) {
-            // Empty slot or we can reuse a tombstone we saw earlier
+            // Empty slot found. If we saw a tombstone earlier, reuse it; else use this slot.
             const std::size_t insert_idx = (first_tombstone != bucket_count_) ? first_tombstone : idx;
 
             OrderState* st = alloc_state(key);
