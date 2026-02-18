@@ -1,0 +1,259 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 2M of event 'cpu-clock:pppH'
+# Event count (approx.): 475978776720
+#
+# Overhead  Command          Shared Object         Symbol                                                                                          
+# ........  ...............  ....................  ................................................................................................
+#
+    15.80%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::find
+            |
+            ---core::OrderStateStore::find
+               |          
+                --2.12%--0x55a347c29060
+                          0x55a347b29050
+
+    14.58%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Push
+            |
+            ---BM_SPSCRing_Push
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+    13.24%  reconciler_benc  libgcc_s.so.1         [.] __udivti3
+            |
+            ---__udivti3
+               |          
+               |--6.54%--benchmark::internal::BenchmarkInstance::Run
+               |          benchmark::internal::(anonymous namespace)::RunInThread
+               |          
+                --2.39%--0
+
+    12.70%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Pop
+            |
+            ---BM_SPSCRing_Pop
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+     8.65%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_PushPop
+            |
+            ---BM_SPSCRing_PushPop
+               benchmark::internal::BenchmarkInstance::Run
+               benchmark::internal::(anonymous namespace)::RunInThread
+
+     7.98%  reconciler_benc  reconciler_bench      [.] BM_TimerWheelSchedule
+            |
+            ---BM_TimerWheelSchedule
+
+     6.80%  reconciler_benc  reconciler_bench      [.] BM_ArenaAllocate
+            |
+            ---BM_ArenaAllocate
+               0
+
+     6.57%  reconciler_benc  reconciler_bench      [.] BM_ComputeMismatch
+            |
+            ---BM_ComputeMismatch
+               0
+
+     3.44%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::upsert
+            |
+            ---core::OrderStateStore::upsert
+               |          
+                --0.58%--0x55a347d29470
+                          0x55a347b29460
+
+     3.17%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::alloc_state
+            |
+            ---core::OrderStateStore::alloc_state
+
+     0.98%  reconciler_benc  libc.so.6             [.] _IO_default_xsputn
+            |
+            ---_IO_default_xsputn
+               |          
+               |--0.26%--0x7ffc3b4f4160
+               |          
+                --0.14%--0
+
+     0.94%  reconciler_benc  reconciler_bench      [.] 0x0000000000006a10
+            |
+            ---0x55a344541a10
+
+     0.25%  reconciler_benc  reconciler_bench      [.] BM_HashTableUpsert
+     0.20%  reconciler_benc  [kernel.kallsyms]     [k] task_sched_runtime
+     0.19%  reconciler_benc  libc.so.6             [.] __snprintf_chk
+     0.17%  reconciler_benc  libc.so.6             [.] 0x000000000019d4ed
+     0.17%  reconciler_benc  libc.so.6             [.] _IO_padn
+     0.11%  reconciler_benc  reconciler_bench      [.] BM_HashTableLookup_FirstProbe
+     0.10%  reconciler_benc  reconciler_bench      [.] BM_HashTableLookup_HighLoadFactor
+     0.09%  reconciler_benc  [vdso]                [.] __vdso_clock_gettime
+     0.09%  reconciler_benc  libc.so.6             [.] _IO_setb
+     0.08%  reconciler_benc  libc.so.6             [.] 0x00000000001a110a
+     0.08%  reconciler_benc  libc.so.6             [.] 0x000000000019d4e8
+     0.07%  reconciler_benc  libc.so.6             [.] 0x000000000005a2ef
+     0.07%  reconciler_benc  [kernel.kallsyms]     [k] syscall_enter_from_user_mode
+     0.06%  reconciler_benc  libc.so.6             [.] 0x0000000000075071
+     0.06%  reconciler_benc  libc.so.6             [.] 0x000000000019d4d9
+     0.05%  reconciler_benc  libc.so.6             [.] 0x00000000000750c4
+     0.05%  reconciler_benc  libc.so.6             [.] 0x000000000019d502
+     0.05%  reconciler_benc  libc.so.6             [.] 0x00000000000284d0
+     0.05%  reconciler_benc  libc.so.6             [.] 0x000000000007510e
+     0.05%  reconciler_benc  libc.so.6             [.] 0x000000000005a2f2
+     0.04%  reconciler_benc  libc.so.6             [.] 0x00000000000750cc
+     0.04%  reconciler_benc  libc.so.6             [.] 0x000000000005a2e5
+     0.04%  reconciler_benc  libc.so.6             [.] 0x000000000019d4c0
+     0.04%  reconciler_benc  libc.so.6             [.] 0x000000000005a2eb
+     0.04%  reconciler_benc  libc.so.6             [.] 0x000000000019d4d4
+     0.04%  reconciler_benc  libc.so.6             [.] clock_gettime
+     0.04%  reconciler_benc  libc.so.6             [.] 0x0000000000075030
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000005a2dd
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000005a2da
+     0.03%  reconciler_benc  libc.so.6             [.] 0x0000000000076203
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000019d508
+     0.03%  reconciler_benc  reconciler_bench      [.] benchmark::State::PauseTiming
+     0.03%  reconciler_benc  reconciler_bench      [.] 0x0000000000006b90
+     0.03%  reconciler_benc  libc.so.6             [.] 0x0000000000088403
+     0.03%  reconciler_benc  libc.so.6             [.] 0x0000000000088485
+     0.03%  reconciler_benc  libc.so.6             [.] 0x00000000000761b0
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000008f9b0
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000005a230
+     0.03%  reconciler_benc  libc.so.6             [.] 0x0000000000075041
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000008e623
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000008e602
+     0.03%  reconciler_benc  libc.so.6             [.] 0x00000000000883f0
+     0.03%  reconciler_benc  libc.so.6             [.] 0x0000000000075f20
+     0.03%  reconciler_benc  libc.so.6             [.] 0x000000000008e663
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008f9f3
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000019d4c4
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076003
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000088459
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008f9c9
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076310
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000088436
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000884b6
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008fa53
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008e6c0
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076ce1
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000005a2ca
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008fa00
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008e5e0
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075c8b
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008e650
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075251
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075fdb
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075f24
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008e6bd
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007516e
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075247
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075354
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000750ef
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075c0b
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007679f
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075faa
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076ce9
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076dd7
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075cd7
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075b94
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076317
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076314
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007523f
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075b4d
+     0.02%  reconciler_benc  libstdc++.so.6.0.30   [.] std::chrono::_V2::steady_clock::now
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075f91
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076793
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000005a2d3
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007515f
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075cb5
+     0.02%  reconciler_benc  [kernel.kallsyms]     [k] __seccomp_filter
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000750d5
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000765f8
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075ad6
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076aad
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000019d4fe
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076325
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007537b
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000761ea
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000008fa2b
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000019d4f2
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075113
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000075aa6
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000750a2
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000761b4
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000761d9
+     0.02%  reconciler_benc  libc.so.6             [.] 0x000000000007620d
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076aaf
+     0.02%  reconciler_benc  reconciler_bench      [.] benchmark::ThreadCPUUsage
+     0.02%  reconciler_benc  libc.so.6             [.] 0x0000000000076099
+     0.02%  reconciler_benc  libc.so.6             [.] 0x00000000000752ae
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000761c2
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000076880
+     0.01%  reconciler_benc  reconciler_bench      [.] benchmark::State::ResumeTiming
+     0.01%  reconciler_benc  reconciler_bench      [.] 0x0000000000006a14
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075276
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000751bc
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] __x64_sys_clock_gettime
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] copy_user_generic_unrolled
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000884d2
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075269
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008849a
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000750a8
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008fa34
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008fa46
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075188
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075134
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075219
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008849f
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008fa17
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000076dd4
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000751f1
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075243
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075c9c
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000007514d
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000884c1
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075228
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000019d4f6
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000007517e
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000076010
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000007600b
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] pid_task
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000761b8
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000751a6
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000008fa4a
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000007522c
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075126
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075fe1
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075078
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075f8e
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000076aa8
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000751ae
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000750fa
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] copy_user_enhanced_fast_string
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000751d1
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075fca
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000019d505
+     0.01%  reconciler_benc  libc.so.6             [.] 0x000000000005a2e1
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075200
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] x64_sys_call
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075121
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] posix_cpu_clock_get
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] pid_for_clock
+     0.01%  reconciler_benc  libc.so.6             [.] 0x00000000000884ae
+     0.01%  reconciler_benc  [kernel.kallsyms]     [k] handle_softirqs
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075233
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075ffb
+     0.01%  reconciler_benc  libc.so.6             [.] 0x0000000000075372
+     0.00%  reconciler_benc  [kernel.kallsyms]     [k] thread_cpu_clock_get
+     0.00%  reconciler_benc  libc.so.6             [.] 0x0000000000076cf3
+     0.00%  reconciler_benc  libc.so.6             [.] 0x0000000000075263
+     0.00%  reconciler_benc  libc.so.6             [.] 0x000000000008fa39
+     0.00%  reconciler_benc  libc.so.6             [.] 0x000000000019d4e4
+     0.00%  reconciler_benc  libc.so.6             [.] 0x000000000007642d
+     0.00%  reconciler_benc  libc.so.6             [.] 0x00000000000884c9
+     0.00%  reconciler_benc  libc.so.6             [.] 0x0000000000075baf
+     0.00%  reconciler_benc  libc.so.6             [.] 0x0000000000076872
+     0.00%  reconciler_benc  libc.so.6             [.] 0x00000000000884cc
+     0.00%  reconciler_benc  libc.so.6             [.] 0x000000000007523a
+     0.00%  reconciler_benc  libc.so.6             [.] 0x0000000000076016
+     0.00%  reconciler_benc  [kernel.kallsyms]     [k] __secure_computing
+     0.00%  reconciler_benc  [kernel.kallsyms]     [k] populate_seccomp_data
