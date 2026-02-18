@@ -229,11 +229,12 @@ For automated performance regression detection:
     path: bench/out/
 ```
 
-## Next Steps
+## Results
 
-- **FX-7062**: Long-term soak testing and performance validation
-- **FX-7063**: CPU profiling and flame graph analysis
-- **FX-7064**: Performance documentation and v1.0.0 release
+For actual benchmark results, CPU profiling data, and flame graph analysis, see:
+
+- [Performance Analysis](../docs/PERFORMANCE.md) — Full microbenchmark tables, latency distributions, CPU profile, and soak test results
+- [Design Journal](../docs/DESIGN_JOURNAL.md) — Rationale for architectural decisions informed by profiling
 
 ## References
 

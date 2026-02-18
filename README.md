@@ -327,6 +327,17 @@ Measured with Google Benchmark (`FX_PERF_ENABLED=OFF`, 5 repetitions per benchma
 - ✅ **Zero crashes**, zero drops — all events accounted for
 - Memory: Initial 557 MB → Final 647 MB (RSS)
 
+### CPU Flame Graph
+
+The interactive flame graph from a 300-second `perf record` session (2M samples) is available at
+[`docs/performance/flamegraph.svg`](docs/performance/flamegraph.svg). Top hot spots:
+
+| Function | % CPU |
+|----------|-------|
+| `OrderStateStore::find` | 15.80% |
+| `OrderStateStore::upsert` | 3.44% |
+| `OrderStateStore::alloc_state` | 3.17% |
+
 Full performance report → [docs/PERFORMANCE.md](docs/PERFORMANCE.md)
 Design decisions → [docs/DESIGN_JOURNAL.md](docs/DESIGN_JOURNAL.md)
 
