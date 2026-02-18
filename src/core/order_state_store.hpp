@@ -49,8 +49,8 @@ private:
     // Sentinel values for key slots. These reserve the top two OrderKey values.
     // The hash function (make_order_key) must never produce these sentinel values.
     // Currently, make_order_key uses FNV-1a over ClOrdID bytes, making sentinel
-    // collisions astronomically unlikely (1 in 2^64). If a collision occurs,
-    // overflow_count_ increments and the order is dropped.
+    // collisions astronomically unlikely (~2 in 2^64, accounting for both sentinels).
+    // If a collision occurs, overflow_count_ increments and the order is dropped.
     static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();
     static constexpr OrderKey tombstone_key_ = std::numeric_limits<OrderKey>::max() - 1;
 
