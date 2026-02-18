@@ -49,6 +49,11 @@ Example:
         default=LEAK_THRESHOLD_MB,
         help=f"Memory leak threshold in MB (default: {LEAK_THRESHOLD_MB})"
     )
+    parser.add_argument(
+        "--recond-log",
+        type=Path,
+        help="Path to reconciler log file (optional, for arena metrics)"
+    )
     return parser.parse_args()
 
 
@@ -101,7 +106,12 @@ def analyze_memory(df: pd.DataFrame, leak_threshold: float) -> Tuple[int, int, i
     max_mb = int(df["recond_rss_mb"].max())
     leak_mb = final_mb - initial_mb
     
-    status = "PASS" if leak_mb < leak_threshold else "FAIL"
+    # FX-7064: Update threshold to 10 MB/hour for memory leak detection
+    # For tests longer than 1 hour, scale threshold proportionally
+    duration_hours = df["elapsed_sec"].iloc[-1] / 3600.0
+    adjusted_threshold = leak_threshold if duration_hours <= 1.0 else leak_threshold * duration_hours
+    
+    status = "PASS" if leak_mb < adjusted_threshold else "FAIL"
     
     return initial_mb, final_mb, max_mb, leak_mb, status
 
@@ -138,6 +148,47 @@ def analyze_throughput(df: pd.DataFrame) -> Tuple[int, float, float]:
     return total_events, duration_hours, rate_per_sec
 
 
+def parse_arena_metrics(log_path: Path) -> Tuple[int, int, int, int]:
+    """
+    Parse arena metrics from reconciler log file.
+    
+    Returns:
+        Tuple of (arena_resets, arena_reset_deferred, arena_bytes_used, arena_bytes_capacity)
+        Returns (0, 0, 0, 0) if log file not provided or metrics not found.
+    """
+    if not log_path or not log_path.exists():
+        return 0, 0, 0, 0
+    
+    import re
+    
+    try:
+        with open(log_path, 'r') as f:
+            # Read last 5000 lines to find the final reconciler stats
+            lines = f.readlines()
+            last_lines = lines[-5000:] if len(lines) > 5000 else lines
+            
+            # Find the last line with arena metrics
+            for line in reversed(last_lines):
+                if "arena_resets=" in line:
+                    # Parse: arena_resets=X arena_reset_deferred=Y arena_bytes_used=Z arena_bytes_capacity=W
+                    match_resets = re.search(r'arena_resets=(\d+)', line)
+                    match_deferred = re.search(r'arena_reset_deferred=(\d+)', line)
+                    match_used = re.search(r'arena_bytes_used=(\d+)', line)
+                    match_capacity = re.search(r'arena_bytes_capacity=(\d+)', line)
+                    
+                    if match_resets and match_deferred and match_used and match_capacity:
+                        return (
+                            int(match_resets.group(1)),
+                            int(match_deferred.group(1)),
+                            int(match_used.group(1)),
+                            int(match_capacity.group(1))
+                        )
+    except Exception as e:
+        print(f"Warning: Failed to parse arena metrics: {e}", file=sys.stderr)
+    
+    return 0, 0, 0, 0
+
+
 def format_large_number(n: int) -> str:
     """Format large numbers with comma separators."""
     return f"{n:,}"
@@ -154,13 +205,17 @@ def print_report(
     total_events: int,
     duration_hours: float,
     rate_per_sec: float,
-    leak_threshold: float
+    leak_threshold: float,
+    arena_resets: int = 0,
+    arena_reset_deferred: int = 0,
+    arena_bytes_used: int = 0,
+    arena_bytes_capacity: int = 0
 ) -> None:
     """Print formatted analysis report."""
     
     print()
     print("=" * 60)
-    print(f"Soak Test Analysis (duration: {duration_hours:.1f} hours)")
+    print(f"Soak Test Analysis (duration: {duration_hours:.3f} hours)")
     print("=" * 60)
     print()
     
@@ -170,7 +225,26 @@ def print_report(
     print(f"  Max:     {max_mb} MB")
     leak_sign = "+" if leak_mb >= 0 else ""
     print(f"  Leak:    {leak_sign}{leak_mb} MB")
+    
+    # FX-7064: Calculate and display memory leak rate
+    if duration_hours > 0:
+        leak_rate_per_hour = leak_mb / duration_hours
+        print(f"  Leak Rate: {leak_rate_per_hour:.1f} MB/hour")
     print()
+    
+    # FX-7064: Display arena metrics if available
+    if arena_resets > 0 or arena_reset_deferred > 0 or arena_bytes_capacity > 0:
+        print("Arena Memory Management (FX-7064):")
+        print(f"  Resets:         {format_large_number(arena_resets)}")
+        print(f"  Deferred:       {format_large_number(arena_reset_deferred)}")
+        if arena_bytes_capacity > 0:
+            arena_mb_used = arena_bytes_used / (1024 * 1024)
+            arena_mb_capacity = arena_bytes_capacity / (1024 * 1024)
+            utilization_pct = (arena_bytes_used / arena_bytes_capacity * 100) if arena_bytes_capacity > 0 else 0
+            print(f"  Used:           {arena_mb_used:.1f} MB")
+            print(f"  Capacity:       {arena_mb_capacity:.1f} MB")
+            print(f"  Utilization:    {utilization_pct:.1f}%")
+        print()
     
     print("CPU Usage:")
     print(f"  Mean: {mean_cpu:.1f}%")
@@ -179,7 +253,7 @@ def print_report(
     
     print("Throughput:")
     print(f"  Total:    {format_large_number(total_events)} events")
-    print(f"  Duration: {duration_hours:.1f} hours")
+    print(f"  Duration: {duration_hours:.3f} hours")
     print(f"  Rate:     {rate_per_sec:,.0f} events/sec")
     print()
     
@@ -206,12 +280,18 @@ def main() -> int:
     mean_cpu, max_cpu = analyze_cpu(df)
     total_events, duration_hours, rate_per_sec = analyze_throughput(df)
     
+    # FX-7064: Parse arena metrics from reconciler log if provided
+    arena_resets, arena_reset_deferred, arena_bytes_used, arena_bytes_capacity = 0, 0, 0, 0
+    if args.recond_log:
+        arena_resets, arena_reset_deferred, arena_bytes_used, arena_bytes_capacity = parse_arena_metrics(args.recond_log)
+    
     # Print report
     print_report(
         initial_mb, final_mb, max_mb, leak_mb, mem_status,
         mean_cpu, max_cpu,
         total_events, duration_hours, rate_per_sec,
-        args.leak_threshold
+        args.leak_threshold,
+        arena_resets, arena_reset_deferred, arena_bytes_used, arena_bytes_capacity
     )
     
     # Exit with appropriate code

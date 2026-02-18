@@ -110,11 +110,16 @@ int main(int argc, char** argv) {
                   primary_stats.parse_failures);
     LOG_SLOW_INFO("DropCopy produced=%zu drops=%zu parse_failures=%zu", dropcopy_stats.produced, dropcopy_stats.drops,
                   dropcopy_stats.parse_failures);
-    LOG_SLOW_INFO("Reconciler processed internal=%llu dropcopy=%llu divergences=%llu ring_drops=%llu",
+    LOG_SLOW_INFO("Reconciler processed internal=%llu dropcopy=%llu divergences=%llu ring_drops=%llu "
+                  "arena_resets=%llu arena_reset_deferred=%llu arena_bytes_used=%llu arena_bytes_capacity=%llu",
                   static_cast<unsigned long long>(counters.internal_events),
                   static_cast<unsigned long long>(counters.dropcopy_events),
                   static_cast<unsigned long long>(counters.divergence_total),
-                  static_cast<unsigned long long>(counters.divergence_ring_drops));
+                  static_cast<unsigned long long>(counters.divergence_ring_drops),
+                  static_cast<unsigned long long>(counters.arena_resets),
+                  static_cast<unsigned long long>(counters.arena_reset_deferred),
+                  static_cast<unsigned long long>(counters.arena_bytes_used),
+                  static_cast<unsigned long long>(counters.arena_bytes_capacity));
 
     util::shutdown_hot_logger();
 
