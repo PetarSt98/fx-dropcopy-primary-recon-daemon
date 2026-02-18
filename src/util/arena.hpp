@@ -53,6 +53,9 @@ public:
 
     void reset() noexcept { offset_ = 0; }
 
+    [[nodiscard]] std::size_t bytes_used() const noexcept { return offset_; }
+    [[nodiscard]] std::size_t capacity() const noexcept { return capacity_bytes_; }
+
 private:
     static constexpr std::uintptr_t align_up(std::uintptr_t value, std::size_t alignment) noexcept {
         const std::uintptr_t remainder = value % static_cast<std::uintptr_t>(alignment);

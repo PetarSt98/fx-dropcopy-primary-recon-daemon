@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 #include "util/perf_macros.hpp"
+#include "core/recon_state.hpp"
 
 namespace core {
 
@@ -192,6 +193,56 @@ void OrderStateStore::reset_epoch() noexcept {
     size_ = 0;
     overflow_count_ = 0;
     free_head_ = nullptr;
+}
+
+// FX-7064: Check if all orders are in terminal/recyclable state (safe to reset arena)
+// This scans the hash table to verify no orders are in active reconciliation states.
+// Orders must be either:
+//   1. Already recycled (tombstone or empty slot)
+//   2. In terminal recon state (Matched or DivergedConfirmed)
+//   3. NOT in grace period (InGrace means timer wheel has active reference)
+//   4. NOT with active gap uncertainty flags (indicates pending sequence gap resolution)
+bool OrderStateStore::can_reset_arena() const noexcept {
+    for (std::size_t i = 0; i < bucket_count_; ++i) {
+        const OrderKey k = keys_[i];
+        
+        // Skip empty and tombstone slots (already recycled or never used)
+        if (k == empty_key_ || k == tombstone_key_) {
+            continue;
+        }
+        
+        // Active order exists - check if it's safe
+        const OrderState* st = values_[i];
+        if (!st) {
+            continue;  // Should not happen, but be defensive
+        }
+        
+        // Unsafe if order is in grace period (timer wheel has active reference)
+        if (st->recon_state == ReconState::InGrace) {
+            return false;
+        }
+        
+        // Unsafe if order has gap uncertainty flags (pending sequence gap resolution)
+        if (st->gap_uncertainty_flags != 0) {
+            return false;
+        }
+        
+        // Unsafe if order is not in terminal reconciliation state
+        if (!is_terminal_recon_state(st->recon_state)) {
+            return false;
+        }
+    }
+    
+    return true;  // All orders are safe to reset
+}
+
+// FX-7064: Reset arena after verifying safety
+// This is O(1) - just resets the arena offset pointer and clears the freelist.
+// The hash table structure is preserved (keys/values remain), but all OrderState
+// memory becomes invalid. This should only be called after can_reset_arena() returns true.
+void OrderStateStore::reset_arena_if_safe() noexcept {
+    arena_.reset();
+    free_head_ = nullptr;  // Clear freelist (all arena memory is reclaimed)
 }
 
 } // namespace core

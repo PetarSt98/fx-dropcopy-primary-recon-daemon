@@ -243,6 +243,7 @@ add_executable(unit_tests_gtest
     tests/from_wire_tests.cpp
     # tests/aeron_subscriber_tests.cpp  # Temporarily disabled - pre-existing API mismatch with newer Aeron
     tests/arena_tests.cpp
+    tests/arena_reset_tests.cpp
     tests/order_state_tests.cpp
     tests/order_lifecycle_tests.cpp
     tests/divergence_tests.cpp

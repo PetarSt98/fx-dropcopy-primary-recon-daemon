@@ -41,10 +41,21 @@ public:
     void recycle(OrderKey key) noexcept;
     void reset_epoch() noexcept;
 
+    // FX-7064: Safe arena reset protocol
+    // Check if all orders are in terminal/recyclable state (safe to reset arena)
+    [[nodiscard]] bool can_reset_arena() const noexcept;
+    
+    // Reset arena after verifying safety (assumes can_reset_arena() was checked)
+    void reset_arena_if_safe() noexcept;
+
     std::size_t bucket_count() const noexcept { return bucket_count_; }
     std::size_t size() const noexcept { return size_; }
     std::size_t overflow_count() const noexcept { return overflow_count_; }
     std::size_t recycled_count() const noexcept { return recycled_count_; }
+    
+    // FX-7064: Arena memory metrics accessors
+    std::size_t arena_bytes_used() const noexcept { return arena_.bytes_used(); }
+    std::size_t arena_bytes_capacity() const noexcept { return arena_.capacity(); }
 
 private:
     // Sentinel values for key slots. These reserve the top two OrderKey values.

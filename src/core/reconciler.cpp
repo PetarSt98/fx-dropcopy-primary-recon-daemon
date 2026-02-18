@@ -270,6 +270,24 @@ void Reconciler::run() {
             last_gap_check_tsc = now;
         }
 
+        // FX-7064: Periodic arena reset check (not in hot path - every 1M events)
+        // Reset arena memory to prevent unbounded growth during long-running operation.
+        // Only safe when all orders are in terminal states (no active grace periods or gaps).
+        static constexpr std::uint64_t ARENA_RESET_INTERVAL = 1'000'000;
+        const std::uint64_t total_events = counters_.internal_events + counters_.dropcopy_events;
+        if (total_events > 0 && (total_events % ARENA_RESET_INTERVAL) == 0) {
+            // Track arena memory usage before potential reset
+            counters_.arena_bytes_used = store_.arena_bytes_used();
+            counters_.arena_bytes_capacity = store_.arena_bytes_capacity();
+            
+            if (store_.can_reset_arena()) {
+                store_.reset_arena_if_safe();
+                ++counters_.arena_resets;
+            } else {
+                ++counters_.arena_reset_deferred;
+            }
+        }
+
         // Backoff when idle - exponential backoff reduces CPU burn
         if (!consumed) {
             if (backoff == 0) {

@@ -55,6 +55,12 @@ struct ReconCounters {
     std::uint64_t gaps_closed_by_timeout{0};  // Sequence gaps closed due to timeout
     std::uint64_t gaps_closed_by_fill{0};     // Sequence gaps closed by out-of-order message fill
     std::uint64_t orders_recycled{0};          // Terminal orders recycled from hash table
+
+    // ===== Arena memory management counters (FX-7064) =====
+    std::uint64_t arena_resets{0};            // Successful arena resets
+    std::uint64_t arena_reset_deferred{0};    // Deferred (unsafe to reset)
+    std::uint64_t arena_bytes_used{0};        // Current arena offset
+    std::uint64_t arena_bytes_capacity{0};    // Arena capacity
 };
 
 // Default deduplication window: don't re-emit identical divergence within this period.
