@@ -14,16 +14,19 @@ namespace core {
 // OrderStateStore is a single-writer, open-addressed hash table keyed by OrderKey.
 // The reconciler thread is the only writer; future readers will be read-only.
 //
-// Deletion strategy: backward-shift (no tombstones).
-//   When an entry is recycled, subsequent entries in the same probe cluster are
-//   shifted backward to fill the gap. This keeps probe chains minimal and avoids
-//   the tombstone accumulation that degrades linear probing over time.
-//   The shift is O(cluster_length) worst case, but clusters are short at typical
-//   load factors (< 50%).
+// Deletion strategy: tombstoning with bounded linear probing (max_probe_ ≤ 256,
+//   specifically max_probe_ = min(bucket_count_, 256)).
+//   When an entry is recycled, the key slot is marked with tombstone_key_ sentinel.
+//   Tombstones preserve probe chain integrity (find() skips over them) while allowing
+//   upsert() to reuse the slot. This gives O(1) deletion without probe-chain fixup.
+//   The probe limit of up to 256 steps (vs original 64) handles tombstone clustering
+//   under sustained high-load scenarios, preventing event drops while maintaining
+//   bounded worst-case latency (~768ns for 256 probes).
 //
 // Memory: OrderState instances are allocated from the provided Arena (append-only,
-//   bulk reset via reset_epoch()). On recycle, the arena memory is not freed but
-//   is cached in a freelist for O(1) reuse by the next upsert.
+//   bulk reset via reset_epoch()). On recycle, the OrderState* is returned to an
+//   intrusive freelist for O(1) reuse by the next upsert. The freelist prevents
+//   arena exhaustion under sustained load (400M orders/day).
 class OrderStateStore {
 public:
     OrderStateStore(util::Arena& arena, std::size_t capacity_hint);
@@ -44,7 +47,13 @@ public:
     std::size_t recycled_count() const noexcept { return recycled_count_; }
 
 private:
+    // Sentinel values for key slots. These reserve the top two OrderKey values.
+    // The hash function (make_order_key) must never produce these sentinel values.
+    // Currently, make_order_key uses FNV-1a over ClOrdID bytes, making sentinel
+    // collisions astronomically unlikely (~2 in 2^64, accounting for both sentinels).
+    // If a collision occurs, overflow_count_ increments and the order is dropped.
     static constexpr OrderKey empty_key_ = std::numeric_limits<OrderKey>::max();
+    static constexpr OrderKey tombstone_key_ = std::numeric_limits<OrderKey>::max() - 1;
 
     static std::size_t next_power_of_two(std::size_t v);
 
@@ -61,6 +70,7 @@ private:
     std::unique_ptr<OrderKey[]> keys_;
     std::unique_ptr<OrderState*[]> values_;
     std::size_t bucket_count_{0};
+    std::size_t max_probe_{0};
     std::size_t size_{0};
     std::size_t overflow_count_{0};
     std::size_t recycled_count_{0};
