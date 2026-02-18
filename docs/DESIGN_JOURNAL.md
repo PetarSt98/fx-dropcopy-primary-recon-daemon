@@ -4,7 +4,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 
 ---
 
-## 1. Why C++17 with Zero-Allocation Hot Path?
+## 1. Why C++23 with Zero-Allocation Hot Path?
 
 **Decision:** Single-threaded reconciliation core with no heap allocations after warm-up.
 
