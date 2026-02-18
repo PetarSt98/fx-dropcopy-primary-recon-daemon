@@ -196,50 +196,23 @@ void OrderStateStore::reset_epoch() noexcept {
 }
 
 // FX-7064: Check if all orders are in terminal/recyclable state (safe to reset arena)
-// This scans the hash table to verify no orders are in active reconciliation states.
-// Orders must be either:
-//   1. Already recycled (tombstone or empty slot)
-//   2. In terminal recon state (Matched or DivergedConfirmed)
-//   3. NOT in grace period (InGrace means timer wheel has active reference)
-//   4. NOT with active gap uncertainty flags (indicates pending sequence gap resolution)
+// For safety, we require the hash table to be empty (all orders recycled).
+// This ensures no dangling OrderState* pointers exist after arena reset.
+// 
+// This is conservative but safe: orders in terminal states should be recycled
+// by the Reconciler shortly after reaching terminal state anyway.
 bool OrderStateStore::can_reset_arena() const noexcept {
-    for (std::size_t i = 0; i < bucket_count_; ++i) {
-        const OrderKey k = keys_[i];
-        
-        // Skip empty and tombstone slots (already recycled or never used)
-        if (k == empty_key_ || k == tombstone_key_) {
-            continue;
-        }
-        
-        // Active order exists - check if it's safe
-        const OrderState* st = values_[i];
-        if (!st) {
-            continue;  // Should not happen, but be defensive
-        }
-        
-        // Unsafe if order is in grace period (timer wheel has active reference)
-        if (st->recon_state == ReconState::InGrace) {
-            return false;
-        }
-        
-        // Unsafe if order has gap uncertainty flags (pending sequence gap resolution)
-        if (st->gap_uncertainty_flags != 0) {
-            return false;
-        }
-        
-        // Unsafe if order is not in terminal reconciliation state
-        if (!is_terminal_recon_state(st->recon_state)) {
-            return false;
-        }
-    }
-    
-    return true;  // All orders are safe to reset
+    // Safe to reset only when no active orders exist (all recycled)
+    return size_ == 0;
 }
 
 // FX-7064: Reset arena after verifying safety
 // This is O(1) - just resets the arena offset pointer and clears the freelist.
-// The hash table structure is preserved (keys/values remain), but all OrderState
-// memory becomes invalid. This should only be called after can_reset_arena() returns true.
+//
+// SAFETY: can_reset_arena() ensures size_ == 0 (all orders recycled), so there
+// are no live OrderState* pointers in the hash table. Tombstone slots remain
+// (preserving probe chains), but their values_ entries are already nullptr
+// from recycling. The arena can be safely reset for reuse.
 void OrderStateStore::reset_arena_if_safe() noexcept {
     arena_.reset();
     free_head_ = nullptr;  // Clear freelist (all arena memory is reclaimed)

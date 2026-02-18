@@ -8,6 +8,9 @@
 
 namespace {
 
+// OrderState is approximately 256 bytes (as documented in FX-7064 problem statement)
+constexpr std::size_t EXPECTED_ORDER_SIZE_BYTES = 256;
+
 core::ExecEvent make_test_event(const std::string& clord_id) {
     core::ExecEvent evt{};
     evt.source = core::Source::Primary;
@@ -37,7 +40,7 @@ TEST_F(ArenaResetTest, SafeResetAfterAllOrdersRecycled) {
         keys.push_back(core::make_order_key(ev));
     }
     
-    EXPECT_GT(store.arena_bytes_used(), 25600);  // At least 256 bytes × 100
+    EXPECT_GT(store.arena_bytes_used(), 100 * EXPECTED_ORDER_SIZE_BYTES);  // At least 256 bytes × 100
     EXPECT_EQ(store.size(), 100);
     
     // Recycle all orders
@@ -103,8 +106,8 @@ TEST_F(ArenaResetTest, DeferResetWhenOrdersNotTerminal) {
     EXPECT_FALSE(store.can_reset_arena());
 }
 
-// Test: Safe reset when all orders are in terminal states
-TEST_F(ArenaResetTest, SafeResetWhenOrdersInTerminalState) {
+// Test: Safe reset when all orders are recycled (even if they were in terminal state)
+TEST_F(ArenaResetTest, SafeResetWhenOrdersRecycledAfterTerminal) {
     core::OrderStateStore store(arena_, 1024);
     
     // Create orders in terminal states
@@ -113,16 +116,25 @@ TEST_F(ArenaResetTest, SafeResetWhenOrdersInTerminalState) {
     ASSERT_NE(os1, nullptr);
     os1->recon_state = core::ReconState::Matched;  // Terminal
     os1->gap_uncertainty_flags = 0;
+    auto key1 = core::make_order_key(ev1);
     
     auto ev2 = make_test_event("DIVERGED_ORDER");
     auto* os2 = store.upsert(ev2);
     ASSERT_NE(os2, nullptr);
     os2->recon_state = core::ReconState::DivergedConfirmed;  // Terminal
     os2->gap_uncertainty_flags = 0;
+    auto key2 = core::make_order_key(ev2);
     
     EXPECT_GT(store.arena_bytes_used(), 0);
     
-    // Should be safe to reset (all orders in terminal states)
+    // Should NOT be safe to reset yet (orders still in hash table)
+    EXPECT_FALSE(store.can_reset_arena());
+    
+    // Recycle the terminal orders
+    store.recycle(key1);
+    store.recycle(key2);
+    
+    // NOW it should be safe to reset (all orders recycled)
     EXPECT_TRUE(store.can_reset_arena());
     store.reset_arena_if_safe();
     
@@ -130,24 +142,27 @@ TEST_F(ArenaResetTest, SafeResetWhenOrdersInTerminalState) {
     EXPECT_EQ(store.arena_bytes_used(), 0);
 }
 
-// Test: Arena reset with mixed states (some safe, some not)
-TEST_F(ArenaResetTest, DeferResetWithMixedStates) {
+// Test: Arena reset deferred when any orders remain in hash table
+TEST_F(ArenaResetTest, DeferResetWhenOrdersNotRecycled) {
     core::OrderStateStore store(arena_, 1024);
     
-    // Create safe order
-    auto ev1 = make_test_event("SAFE_ORDER");
+    // Create order
+    auto ev1 = make_test_event("ORDER1");
     auto* os1 = store.upsert(ev1);
     ASSERT_NE(os1, nullptr);
     os1->recon_state = core::ReconState::Matched;
     os1->gap_uncertainty_flags = 0;
     
-    // Create unsafe order (in grace)
-    auto ev2 = make_test_event("UNSAFE_ORDER");
+    // Should NOT be safe to reset (order still in hash table, not recycled)
+    EXPECT_FALSE(store.can_reset_arena());
+    
+    // Even if we add more orders
+    auto ev2 = make_test_event("ORDER2");
     auto* os2 = store.upsert(ev2);
     ASSERT_NE(os2, nullptr);
     os2->recon_state = core::ReconState::InGrace;
     
-    // Should NOT be safe to reset (at least one unsafe order)
+    // Still not safe
     EXPECT_FALSE(store.can_reset_arena());
 }
 
@@ -155,19 +170,24 @@ TEST_F(ArenaResetTest, DeferResetWithMixedStates) {
 TEST_F(ArenaResetTest, ArenaMemoryReuseAfterReset) {
     core::OrderStateStore store(arena_, 1024);
     
-    // Allocate 50 orders
+    // Allocate and recycle 50 orders
+    std::vector<core::OrderKey> keys;
     for (int i = 0; i < 50; ++i) {
         auto ev = make_test_event("ORDER" + std::to_string(i));
         auto* os = store.upsert(ev);
         ASSERT_NE(os, nullptr);
-        os->recon_state = core::ReconState::Matched;
-        os->gap_uncertainty_flags = 0;
+        keys.push_back(core::make_order_key(ev));
     }
     
     const std::size_t bytes_before = store.arena_bytes_used();
-    EXPECT_GT(bytes_before, 12800);  // At least 256 bytes × 50
+    EXPECT_GT(bytes_before, 50 * EXPECTED_ORDER_SIZE_BYTES);  // At least 256 bytes × 50
     
-    // Reset arena (all orders in terminal state)
+    // Recycle all orders
+    for (const auto& key : keys) {
+        store.recycle(key);
+    }
+    
+    // Reset arena (all orders recycled)
     EXPECT_TRUE(store.can_reset_arena());
     store.reset_arena_if_safe();
     EXPECT_EQ(store.arena_bytes_used(), 0);

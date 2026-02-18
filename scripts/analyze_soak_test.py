@@ -24,8 +24,8 @@ except ImportError:
     sys.exit(1)
 
 
-# Memory leak threshold in MB
-LEAK_THRESHOLD_MB = 50
+# Memory leak threshold in MB/hour (FX-7064)
+LEAK_THRESHOLD_MB_PER_HOUR = 10
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,8 +46,8 @@ Example:
     parser.add_argument(
         "--leak-threshold",
         type=float,
-        default=LEAK_THRESHOLD_MB,
-        help=f"Memory leak threshold in MB (default: {LEAK_THRESHOLD_MB})"
+        default=LEAK_THRESHOLD_MB_PER_HOUR,
+        help=f"Memory leak threshold in MB/hour (default: {LEAK_THRESHOLD_MB_PER_HOUR})"
     )
     parser.add_argument(
         "--recond-log",
@@ -106,10 +106,10 @@ def analyze_memory(df: pd.DataFrame, leak_threshold: float) -> Tuple[int, int, i
     max_mb = int(df["recond_rss_mb"].max())
     leak_mb = final_mb - initial_mb
     
-    # FX-7064: Update threshold to 10 MB/hour for memory leak detection
-    # For tests longer than 1 hour, scale threshold proportionally
+    # FX-7064: Scale threshold by duration to enforce consistent leak rate (MB/hour)
+    # leak_threshold represents the acceptable leak rate in MB/hour
     duration_hours = df["elapsed_sec"].iloc[-1] / 3600.0
-    adjusted_threshold = leak_threshold if duration_hours <= 1.0 else leak_threshold * duration_hours
+    adjusted_threshold = leak_threshold * duration_hours
     
     status = "PASS" if leak_mb < adjusted_threshold else "FAIL"
     
@@ -257,11 +257,15 @@ def print_report(
     print(f"  Rate:     {rate_per_sec:,.0f} events/sec")
     print()
     
-    # Pass/Fail status
+    # Pass/Fail status with adjusted threshold calculation
+    adjusted_threshold = leak_threshold * duration_hours
     if mem_status == "PASS":
-        print(f"✅ PASS: No significant memory leak (threshold: {leak_threshold} MB)")
+        print(f"✅ PASS: No significant memory leak")
+        print(f"   Threshold: {leak_threshold} MB/hour ({adjusted_threshold:.1f} MB for {duration_hours:.1f} hours)")
     else:
-        print(f"❌ FAIL: Memory leak detected (leak: {leak_mb} MB, threshold: {leak_threshold} MB)")
+        print(f"❌ FAIL: Memory leak detected")
+        print(f"   Leak: {leak_mb} MB")
+        print(f"   Threshold: {leak_threshold} MB/hour ({adjusted_threshold:.1f} MB for {duration_hours:.1f} hours)")
     print()
     
     print("=" * 60)
