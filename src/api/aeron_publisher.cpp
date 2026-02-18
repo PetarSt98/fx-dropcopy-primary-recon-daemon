@@ -1,5 +1,6 @@
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -50,16 +51,20 @@ bool publish(aeron::Publication& pub, const core::WireExecEvent& evt) {
 
 int main(int argc, char** argv) {
     if (argc < 5) {
-        std::cerr << "Usage: " << argv[0] << " <channel> <stream_id> <count> <sleep_ms>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <channel> <stream_id> <count> <sleep_us>" << std::endl;
         return 1;
     }
 
     const std::string channel = argv[1];
     const std::int32_t stream_id = static_cast<std::int32_t>(std::stoi(argv[2]));
     const std::size_t count = static_cast<std::size_t>(std::stoul(argv[3]));
-    const auto sleep_ms = std::chrono::milliseconds{std::stoul(argv[4])};
+    const auto sleep_us = std::chrono::microseconds{std::stoul(argv[4])};
 
     aeron::Context ctx;
+    const char* aeron_dir = std::getenv("AERON_DIR");
+    if (aeron_dir && aeron_dir[0] != '\0') {
+        ctx.aeronDir(aeron_dir);
+    }
     auto client = aeron::Aeron::connect(ctx);
     const auto pub_reg_id = client->addPublication(channel, stream_id);
 
@@ -77,14 +82,54 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Wait for at least one subscriber to connect before sending.
+    // Without this, early events are lost because Aeron UDP has no
+    // delivery guarantee when no subscriber is listening.
+    {
+        const auto conn_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        while (!pub->isConnected() && std::chrono::steady_clock::now() < conn_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        if (!pub->isConnected()) {
+            std::cerr << "No subscriber connected within 10s" << std::endl;
+            return 1;
+        }
+        // Brief warmup after connection: Aeron's isConnected() can return
+        // true before the subscriber image is fully established at the
+        // media driver level. This avoids losing the first few hundred events.
+        std::this_thread::sleep_for(std::chrono::milliseconds{250});
+    }
+
+    // Pre-generate events upfront to keep std::to_string allocation out of
+    // the hot loop. Cap at 100k to avoid OOM on long soak tests (e.g. 18M events).
+    // The OrderStateStore now handles high tombstone density via periodic
+    // compaction, so the pre-generated count is not constrained by store capacity.
+    constexpr std::size_t max_pregenerated = 100000;
+    const std::size_t pregenerate_count = count < max_pregenerated ? count : max_pregenerated;
+
+    std::vector<core::WireExecEvent> events;
+    events.reserve(pregenerate_count);
+    for (std::size_t i = 0; i < pregenerate_count; ++i) {
+        events.push_back(make_wire_exec(i + 1));
+    }
+
     std::size_t sent = 0;
-    while (sent < count) {
-        const auto evt = make_wire_exec(sent + 1);
-        if (publish(*pub, evt)) {
-            ++sent;
-            std::this_thread::sleep_for(sleep_ms);
-        } else {
-            std::this_thread::yield();
+    if (sleep_us.count() == 0) {
+        // Truly unthrottled: tight busy loop with no yield/sleep.
+        // This saturates the reconciler to stress-test business logic.
+        while (sent < count) {
+            if (publish(*pub, events[sent % pregenerate_count])) {
+                ++sent;
+            }
+        }
+    } else {
+        while (sent < count) {
+            if (publish(*pub, events[sent % pregenerate_count])) {
+                ++sent;
+                std::this_thread::sleep_for(sleep_us);
+            } else {
+                std::this_thread::yield();
+            }
         }
     }
 

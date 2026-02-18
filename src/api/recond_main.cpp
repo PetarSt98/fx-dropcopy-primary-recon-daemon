@@ -1,4 +1,5 @@
 #include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -15,6 +16,16 @@
 #include "util/arena.hpp"
 #include "util/async_log.hpp"
 #include "util/perf_counters.hpp"
+
+namespace {
+std::atomic<bool>* g_stop_flag = nullptr;
+
+void signal_handler(int /*signum*/) {
+    if (g_stop_flag) {
+        g_stop_flag->store(true, std::memory_order_release);
+    }
+}
+} // namespace
 
 int main(int argc, char** argv) {
     if (argc < 5) {
@@ -44,11 +55,20 @@ int main(int argc, char** argv) {
     ingest::ThreadStats dropcopy_stats;
     core::ReconCounters counters;
     std::atomic<bool> stop_flag{false};
+    g_stop_flag = &stop_flag;
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGINT, signal_handler);
+
     util::Arena arena(util::Arena::default_capacity_bytes);
     constexpr std::size_t order_capacity_hint = 1u << 16;
     core::OrderStateStore store(arena, order_capacity_hint);
 
     aeron::Context context;
+    const char* aeron_dir = std::getenv("AERON_DIR");
+    if (aeron_dir && aeron_dir[0] != '\0') {
+        context.aeronDir(aeron_dir);
+        LOG_SLOW_INFO("Using AERON_DIR=%s", aeron_dir);
+    }
     auto client = aeron::Aeron::connect(context);
 
     core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
@@ -70,7 +90,12 @@ int main(int argc, char** argv) {
         const auto duration_ms = std::chrono::milliseconds{std::strtoul(duration_env, nullptr, 10)};
         LOG_SLOW_INFO("fx_exec_recond running for %llu ms before shutdown.",
                       static_cast<unsigned long long>(duration_ms.count()));
-        std::this_thread::sleep_for(duration_ms);
+        // Sleep in short intervals so SIGTERM can interrupt promptly
+        const auto deadline = std::chrono::steady_clock::now() + duration_ms;
+        while (!stop_flag.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        }
     } else {
         LOG_SLOW_INFO("fx_exec_recond running. Press Enter to exit.");
         std::cin.get();

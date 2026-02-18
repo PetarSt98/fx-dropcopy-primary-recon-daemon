@@ -54,6 +54,49 @@ RUN cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREF
 
 CMD ["bash"]
 
+# Profiling image: extends dev with perf, FlameGraph toolkit, and Perl
+# for CPU flame graph generation. Use with privileged: true in compose.
+FROM dev AS profiling
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git perl bc; \
+    rm -rf /var/lib/apt/lists/*; \
+    \
+    # Best-effort perf install across environments (generic, azure, WSL2).
+    KREL="$(uname -r)"; \
+    echo "Kernel release: $KREL"; \
+    apt-get update; \
+    ( \
+      apt-get install -y --no-install-recommends \
+        linux-tools-common \
+        "linux-tools-$KREL" \
+        "linux-cloud-tools-$KREL" \
+      || apt-get install -y --no-install-recommends linux-tools-generic \
+      || apt-get install -y --no-install-recommends linux-tools-azure linux-cloud-tools-azure \
+      || apt-get install -y --no-install-recommends linux-tools-standard-WSL2 linux-cloud-tools-standard-WSL2 \
+      || true \
+    ); \
+    rm -rf /var/lib/apt/lists/* || true; \
+    \
+    # If perf exists, show version; if not, continue (build must still succeed).
+    if command -v perf >/dev/null 2>&1; then \
+      perf --version || true; \
+    else \
+      echo "NOTE: perf not available for kernel $KREL in this build environment. Image will be built without perf."; \
+    fi; \
+    \
+    git clone --branch v1.0 --depth 1 https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
+
+
+
+# Fix CRLF line endings from Windows host and ensure scripts are executable
+RUN find scripts/ -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null; \
+    chmod +x scripts/*.sh 2>/dev/null; \
+    true
+
+CMD ["bash"]
+
 # Runtime image: minimal footprint for running the daemon
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
