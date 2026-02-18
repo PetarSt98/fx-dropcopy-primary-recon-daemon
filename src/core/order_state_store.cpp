@@ -113,7 +113,7 @@ OrderState* OrderStateStore::upsert(const ExecEvent& ev) noexcept {
         } else if (k == empty_key_) {
             // Empty slot or we can reuse a tombstone we saw earlier
             const std::size_t insert_idx = (first_tombstone != bucket_count_) ? first_tombstone : idx;
-            
+
             OrderState* st = alloc_state(key);
             if (!st) {
                 ++overflow_count_;
@@ -163,10 +163,10 @@ void OrderStateStore::recycle(OrderKey key) noexcept {
             // Return the OrderState memory to the freelist.
             free_state(values_[idx]);
             values_[idx] = nullptr;
-            
+
             // Mark slot as tombstone
             keys_[idx] = tombstone_key_;
-            
+
             --size_;
             ++recycled_count_;
             return;
