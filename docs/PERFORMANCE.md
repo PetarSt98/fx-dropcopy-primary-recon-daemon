@@ -2,8 +2,8 @@
 
 ## Test Environment
 
-- **CPU:** 22 × 3072 MHz (as reported by Google Benchmark)
-- **CPU Caches:** L1d 48 KiB, L1i 64 KiB, L2 2048 KiB, L3 24576 KiB (×11 cores)
+- **CPU:** 11 physical cores / 22 threads @ 3072 MHz (as reported by Google Benchmark)
+- **CPU Caches:** L1d 48 KiB, L1i 64 KiB, L2 2048 KiB, L3 24576 KiB (per core, ×11)
 - **Compiler:** GCC with `-O3` (Release mode, CMake Release preset)
 - **OS:** Linux (Docker container, Ubuntu-based)
 
@@ -191,9 +191,12 @@ For production deployment on dedicated hardware:
    echo 256 > /proc/sys/vm/nr_hugepages
    ```
 
-4. **IRQ isolation:** Prevent hardware interrupts on the reconciler core.
+4. **IRQ isolation:** Prevent hardware interrupts on the reconciler core. Identify IRQ numbers from `/proc/interrupts` for your network interface.
    ```bash
-   echo 4 > /proc/irq/<irq_num>/smp_affinity_list
+   # Find IRQs for your NIC (e.g., eth0)
+   grep eth0 /proc/interrupts
+   # Move each IRQ off the reconciler core (core 4 in this example)
+   echo 0-3,5-15 > /proc/irq/<irq_num>/smp_affinity_list
    ```
 
 ---

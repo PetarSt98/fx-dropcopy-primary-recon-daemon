@@ -95,7 +95,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 
 **Rationale:**
 - For audit compliance and incident investigation, replaying the same events must produce the same state and the same divergences.
-- No use of wall-clock time in reconciliation decisions — all timing is based on event timestamps and TSC counters.
+- No use of wall-clock time in reconciliation decisions — all timing is based on event timestamps and TSC counters (assumes invariant TSC / `constant_tsc` CPU feature, standard on modern x86_64).
 - This enables "replay from log" for post-mortem analysis without approximation.
 
 ---

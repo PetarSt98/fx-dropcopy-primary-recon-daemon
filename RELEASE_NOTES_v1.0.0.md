@@ -36,15 +36,15 @@
 
 ### Benchmarks
 
-| Component | Latency (Median) |
-|-----------|-----------------|
-| Hash lookup (first probe) | 0.89 ns |
+| Component | Latency (Mean) |
+|-----------|----------------|
+| Hash lookup (first probe) | 0.93 ns |
 | Arena allocation | 0.73 ns |
-| Timer wheel schedule | 4.27 ns |
+| Timer wheel schedule | 4.30 ns |
 | Compute mismatch | 0.94 ns |
-| SPSC ring push | 6.78 ns |
-| SPSC ring pop | 6.75 ns |
-| Hash upsert | 65.90 ns |
+| SPSC ring push | 6.69 ns |
+| SPSC ring pop | 6.64 ns |
+| Hash upsert | 65.50 ns |
 | Full pipeline (P99) | 379 ns |
 
 ### Documentation
