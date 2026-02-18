@@ -134,9 +134,10 @@ Profiled with `perf record` at 4999 Hz for 300 seconds on the benchmark binary (
 | Initial RSS | 557 MB |
 | Final RSS | 647 MB |
 | Max RSS | 647 MB |
-| Growth | +90 MB |
+| Warm-up | +90 MB |
 
 Memory growth is expected during the initial phase as the arena allocator provisions `OrderState` objects for new orders. Growth stabilizes once the active order set reaches steady state.
+No memory leaks.
 
 ### CPU Usage
 
