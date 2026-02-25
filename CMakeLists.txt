@@ -71,6 +71,10 @@ add_library(fx_core
     src/core/order_state.hpp
     src/core/order_state_store.cpp
     src/core/reconciler.cpp
+    src/persist/crc32c.hpp
+    src/persist/record_format.hpp
+    src/persist/journal_writer.hpp
+    src/persist/journal_writer.cpp
     src/util/rdtsc.hpp
     src/util/async_log.hpp
     src/util/async_log.cpp
@@ -258,6 +262,8 @@ add_executable(unit_tests_gtest
     tests/recon_config_tests.cpp
     tests/reconciler_two_stage_tests.cpp
     tests/latency_tracking_tests.cpp
+    tests/journal_writer_tests.cpp
+    tests/journal_writer_integration_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
