@@ -82,6 +82,8 @@ add_library(fx_core
     src/util/perf_macros.hpp
     src/persist/crc32c.hpp
     src/persist/record_format.hpp
+    src/persist/journal_writer.hpp
+    src/persist/journal_writer.cpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -261,6 +263,8 @@ add_executable(unit_tests_gtest
     tests/reconciler_two_stage_tests.cpp
     tests/latency_tracking_tests.cpp
     tests/record_format_tests.cpp
+    tests/journal_writer_tests.cpp
+    tests/journal_writer_integration_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
