@@ -20,7 +20,9 @@ inline constexpr std::array<std::uint32_t, 256> crc32c_table = []() {
 
 /// Compute CRC-32C (Castagnoli) over a byte buffer.
 /// Software lookup-table implementation — no external dependencies.
+/// @pre data must be non-null when len > 0.
 inline std::uint32_t crc32c(const std::byte* data, std::size_t len) noexcept {
+    if (!data) return 0;
     std::uint32_t crc = 0xFFFFFFFFu;
     for (std::size_t i = 0; i < len; ++i) {
         crc = crc32c_table[static_cast<std::uint8_t>(crc ^ static_cast<std::uint8_t>(data[i]))] ^ (crc >> 8);

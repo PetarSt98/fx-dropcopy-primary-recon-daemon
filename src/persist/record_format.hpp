@@ -249,6 +249,7 @@ struct ScanStats {
 /// BadVersion, BadLength, BadCrc), or after the buffer is exhausted.
 inline ScanStats scan_records(const std::byte* data, std::size_t size) noexcept {
     ScanStats stats{};
+    if (!data && size > 0) return stats;
     std::size_t offset = 0;
 
     while (offset < size) {
