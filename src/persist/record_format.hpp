@@ -26,7 +26,7 @@ enum class RecordType : std::uint8_t {
 };
 
 // ---------------------------------------------------------------------------
-// RecordHeaderV1 — explicit serialization helpers (no packing pragmas)
+// RecordHeaderV1 — packed struct with portable packing for exact on-disk layout
 // ---------------------------------------------------------------------------
 // On-disk layout (all little-endian):
 //   [0..3]   magic    uint32
@@ -156,10 +156,12 @@ struct DecodedRecordView {
     out_bytes_written = 0;
 
     if (payload_len > kMaxPayloadBytes) return false;
+    if (!payload && payload_len > 0) return false;
 
     const std::size_t pad   = padding_for(payload_len);
     const std::size_t total = kHeaderSize + payload_len + pad;
     if (out_cap < total) return false;
+    if (!out_buf) return false;
 
     // Compute CRC-32C over payload only
     const std::uint32_t crc = crc32c(payload, payload_len);
@@ -198,6 +200,7 @@ struct DecodedRecordView {
     DecodedRecordView& out
 ) noexcept {
     if (size < kHeaderSize) return DecodeStatus::NeedMoreData;
+    if (!data) return DecodeStatus::NeedMoreData;
 
     const std::uint32_t magic   = detail::read_le32(data);
     if (magic != kMagic) return DecodeStatus::BadMagic;
@@ -241,8 +244,9 @@ struct ScanStats {
     std::size_t first_bad_offset = static_cast<std::size_t>(-1);
 };
 
-/// Iterate a buffer of concatenated records.  Stops on NeedMoreData (partial
-/// trailing record) or after the buffer is exhausted.
+/// Iterate a buffer of concatenated records. Stops on NeedMoreData (partial
+/// trailing record), on the first non-Ok decode status (for example BadMagic,
+/// BadVersion, BadLength, BadCrc), or after the buffer is exhausted.
 inline ScanStats scan_records(const std::byte* data, std::size_t size) noexcept {
     ScanStats stats{};
     std::size_t offset = 0;

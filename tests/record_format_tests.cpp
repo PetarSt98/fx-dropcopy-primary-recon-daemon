@@ -19,17 +19,24 @@ static const std::byte kHello[] = {
     std::byte{'H'}, std::byte{'e'}, std::byte{'l'},
     std::byte{'l'}, std::byte{'o'}};
 
-// Convenience: encode into a vector.
+// Convenience: encode into a vector (aborts test on failure).
+static void encode_into(std::vector<std::byte>& buf, RecordType type,
+                        std::uint16_t flags, std::uint64_t seqno,
+                        const std::byte* payload, std::uint32_t payload_len) {
+    buf.resize(kHeaderSize + payload_len + 7); // worst-case
+    std::size_t written = 0;
+    bool ok = encode_record_v1(type, flags, seqno, payload, payload_len,
+                               buf.data(), buf.size(), written);
+    ASSERT_TRUE(ok);
+    buf.resize(written);
+}
+
 static std::vector<std::byte> encode(RecordType type, std::uint16_t flags,
                                      std::uint64_t seqno,
                                      const std::byte* payload,
                                      std::uint32_t payload_len) {
-    std::vector<std::byte> buf(kHeaderSize + payload_len + 7); // worst-case
-    std::size_t written = 0;
-    bool ok = encode_record_v1(type, flags, seqno, payload, payload_len,
-                               buf.data(), buf.size(), written);
-    EXPECT_TRUE(ok);
-    buf.resize(written);
+    std::vector<std::byte> buf;
+    encode_into(buf, type, flags, seqno, payload, payload_len);
     return buf;
 }
 
@@ -132,7 +139,7 @@ TEST(DecodeRecord, NeedMoreDataShortHeader) {
 TEST(DecodeRecord, NeedMoreDataShortPayload) {
     auto buf = encode(RecordType::ExecEvent, 0, 1, kHello, 5);
     DecodedRecordView view{};
-    // Provide only header + 2 bytes of payload (need 5 + 3 padding = 8 more)
+    // Provide only header + 2 bytes of payload (need 3 payload + 3 padding = 6 more)
     EXPECT_EQ(decode_record_v1(buf.data(), kHeaderSize + 2, view),
               DecodeStatus::NeedMoreData);
 }
