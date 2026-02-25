@@ -80,6 +80,8 @@ add_library(fx_core
     src/util/latency_histogram.hpp
     src/util/perf_counters.hpp
     src/util/perf_macros.hpp
+    src/persist/crc32c.hpp
+    src/persist/record_format.hpp
 )
 
 target_include_directories(fx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -258,6 +260,7 @@ add_executable(unit_tests_gtest
     tests/recon_config_tests.cpp
     tests/reconciler_two_stage_tests.cpp
     tests/latency_tracking_tests.cpp
+    tests/record_format_tests.cpp
 )
 target_sources(unit_tests_gtest PRIVATE src/ingest/aeron_subscriber.cpp)
 target_include_directories(unit_tests_gtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
