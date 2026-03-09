@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <atomic>
 #include "util/rdtsc.hpp"
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -94,9 +95,10 @@ public:
         }
         
         // Calculate elapsed wall-clock time in nanoseconds
-        const std::uint64_t elapsed_ns = 
-            static_cast<std::uint64_t>(end_ts.tv_sec - start_ts.tv_sec) * NS_PER_SEC +
-            static_cast<std::uint64_t>(end_ts.tv_nsec - start_ts.tv_nsec);
+        std::int64_t secs  = end_ts.tv_sec  - start_ts.tv_sec;
+        std::int64_t nsecs = end_ts.tv_nsec - start_ts.tv_nsec;
+        if (nsecs < 0) { --secs; nsecs += static_cast<std::int64_t>(NS_PER_SEC); }
+        const std::uint64_t elapsed_ns = static_cast<std::uint64_t>(secs) * NS_PER_SEC + static_cast<std::uint64_t>(nsecs);
         
         if (elapsed_ns == 0) {
             return false;
@@ -124,7 +126,7 @@ public:
 
     // Get TSC frequency in Hz (cycles per second)
     [[nodiscard]] std::uint64_t tsc_freq_hz() const noexcept {
-        return tsc_freq_hz_;
+        return tsc_freq_hz_.load(std::memory_order_relaxed);
     }
     
     // Check if runtime calibration was performed
@@ -137,10 +139,11 @@ public:
     [[nodiscard]] std::uint64_t cycles_to_ns(std::uint64_t cycles) const noexcept {
         // Use 128-bit multiplication to avoid overflow
         // Result: (cycles * ns_per_cycle_q32) >> 32
-#if defined(__SIZEOF_INT128__)
-        __uint128_t product = static_cast<__uint128_t>(cycles) * ns_per_cycle_q32_;
+        const auto npc = ns_per_cycle_q32_.load(std::memory_order_relaxed); // plain mov on x86
+    #if defined(__SIZEOF_INT128__)
+        __uint128_t product = static_cast<__uint128_t>(cycles) * npc;
         return static_cast<std::uint64_t>(product >> FRAC_BITS);
-#else
+    #else
         // Fallback for platforms without 128-bit integers
         // Split into high/low parts to avoid overflow
         const std::uint64_t cycles_hi = cycles >> 32;
@@ -163,8 +166,9 @@ public:
     // Convert nanoseconds to TSC cycles using Q32.32 fixed-point
     // ns_to_cycles = ns * cycles_per_ns_q32 >> 32
     [[nodiscard]] std::uint64_t ns_to_cycles(std::uint64_t ns) const noexcept {
+        const auto cpn = cycles_per_ns_q32_.load(std::memory_order_relaxed);
 #if defined(__SIZEOF_INT128__)
-        __uint128_t product = static_cast<__uint128_t>(ns) * cycles_per_ns_q32_;
+        __uint128_t product = static_cast<__uint128_t>(ns) * cpn;
         return static_cast<std::uint64_t>(product >> FRAC_BITS);
 #else
         // Fallback using same technique as cycles_to_ns
@@ -185,13 +189,11 @@ public:
 
     // Legacy accessor for backward compatibility
     [[nodiscard]] std::uint64_t cycles_per_ns() const noexcept {
-        return cycles_per_ns_q32_ >> FRAC_BITS;  // Return integer part only
+        return cycles_per_ns_q32_.load(std::memory_order_relaxed) >> FRAC_BITS;  // Return integer part only
     }
 
     // Allow manual override of TSC frequency (for testing or known hardware)
     void set_tsc_freq_hz(std::uint64_t freq_hz) noexcept {
-        tsc_freq_hz_ = freq_hz;
-        
         // Compute Q32.32 fixed-point conversion factors
         // cycles_per_ns_q32 = (freq_hz << 32) / NS_PER_SEC
         // ns_per_cycle_q32 = (NS_PER_SEC << 32) / freq_hz
@@ -199,15 +201,17 @@ public:
         if (freq_hz == 0) {
             freq_hz = DEFAULT_TSC_FREQ_HZ;  // Prevent division by zero
         }
+        tsc_freq_hz_.store(freq_hz, std::memory_order_relaxed);
+        
         
 #if defined(__SIZEOF_INT128__)
-        cycles_per_ns_q32_ = static_cast<std::uint64_t>(
+          cycles_per_ns_q32_.store(static_cast<std::uint64_t>(
             (static_cast<__uint128_t>(freq_hz) << FRAC_BITS) / NS_PER_SEC
-        );
-        ns_per_cycle_q32_ = static_cast<std::uint64_t>(
+        ), std::memory_order_relaxed);
+        ns_per_cycle_q32_.store(static_cast<std::uint64_t>(
             (static_cast<__uint128_t>(NS_PER_SEC) << FRAC_BITS) / freq_hz
-        );
-#else
+        ), std::memory_order_relaxed);
+#else 
         // Fallback: use double for intermediate calculation, then convert
         const double cycles_per_ns = static_cast<double>(freq_hz) / static_cast<double>(NS_PER_SEC);
         const double ns_per_cycle = static_cast<double>(NS_PER_SEC) / static_cast<double>(freq_hz);
@@ -225,12 +229,19 @@ public:
     // Call this during application initialization before any timing-critical code
     // Blocks for ~duration_ms to measure TSC frequency
     void calibrate_blocking(std::uint64_t duration_ms = 100) noexcept {
-        if (has_invariant_tsc()) {
-            calibrate(duration_ms);
-        } else {
-            std::fprintf(stderr, "[TscCalibration] WARNING: Invariant TSC not detected. "
-                                 "Using default frequency: %lu Hz\n",
-                         static_cast<unsigned long>(DEFAULT_TSC_FREQ_HZ));
+        if (!has_invariant_tsc()) {
+            // Warn but still calibrate — non-invariant TSC is unstable under power
+            // state changes, but calibration is still better than a hardcoded 3 GHz.
+            // On hypervisors has_invariant_tsc() is often false even on stable TSC.
+            std::fprintf(stderr,
+                "[TscCalibration] WARNING: Invariant TSC not detected. "
+                "Calibration may be imprecise under CPU frequency scaling.\n");
+        }
+        if (!calibrate(duration_ms)) {
+            std::fprintf(stderr,
+                "[TscCalibration] WARNING: Calibration failed. "
+                "Using default frequency: %lu Hz\n",
+                static_cast<unsigned long>(DEFAULT_TSC_FREQ_HZ));
         }
     }
 
@@ -247,9 +258,9 @@ private:
         set_tsc_freq_hz(DEFAULT_TSC_FREQ_HZ);
     }
 
-    std::uint64_t tsc_freq_hz_;           // TSC frequency in Hz
-    std::uint64_t cycles_per_ns_q32_;     // Q32.32 fixed-point: cycles per nanosecond
-    std::uint64_t ns_per_cycle_q32_;      // Q32.32 fixed-point: nanoseconds per cycle
+    std::atomic<std::uint64_t> tsc_freq_hz_;           // TSC frequency in Hz
+    std::atomic<std::uint64_t> cycles_per_ns_q32_;     // Q32.32 fixed-point: cycles per nanosecond
+    std::atomic<std::uint64_t> ns_per_cycle_q32_;      // Q32.32 fixed-point: nanoseconds per cycle
     bool calibrated_;                      // True if runtime calibration succeeded
 };
 
