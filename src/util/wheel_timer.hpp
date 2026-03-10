@@ -135,7 +135,7 @@ public:
                     const std::uint64_t dtick = tsc_to_tick(rdeadline);
                     std::uint64_t delta = (dtick > current_tick_)
                         ? (dtick - current_tick_)
-                        : 1;   // floor reciprocal can undercount by 1; force forward
+                        : 1;   // safety: force forward progress on rounding edge cases
                     if (delta >= NUM_BUCKETS) delta = NUM_BUCKETS - 1;
 
                     const std::size_t target = (current_tick_ + delta) & (NUM_BUCKETS - 1);
@@ -186,18 +186,18 @@ public:
 private:
     using Bucket = FixedCapacityVec<Entry, BUCKET_CAPACITY>;
 
-    // Pre-compute floor(2^64 / d) for fast approximate division via mulhi64.
-    // Max error: result may be 1 less than true floor(x / d).
-    // For bucket placement this is safe -- exact deadline_tsc comparison handles precision.
+    // Pre-compute ceil(2^64 / d) for fast approximate division via mulhi64.
+    // Using ceiling ensures tsc_to_tick never undercounts (at most overcounts
+    // by 1 tick), which is safe -- exact deadline_tsc comparison handles precision.
     static std::uint64_t compute_tick_reciprocal(std::uint64_t d) noexcept {
         if (d <= 1) return ~std::uint64_t{0};
 #if defined(__SIZEOF_INT128__)
-        return static_cast<std::uint64_t>(
-            (static_cast<__uint128_t>(1) << 64) / d
-        );
+        const __uint128_t num = static_cast<__uint128_t>(1) << 64;
+        return static_cast<std::uint64_t>((num + d - 1) / d);
 #elif defined(_MSC_VER) && defined(_M_X64)
         std::uint64_t remainder;
-        return _udiv128(1, 0, d, &remainder);
+        std::uint64_t quotient = _udiv128(1, 0, d, &remainder);
+        return remainder != 0 ? quotient + 1 : quotient;
 #else
         return 0;  // Signals fallback to plain division
 #endif
