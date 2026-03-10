@@ -61,15 +61,20 @@ public:
         size_ = 0;
     }
 
-    // Element access (no bounds checking - caller's responsibility)
-    [[nodiscard]] constexpr T& operator[](size_type idx) noexcept { return data_[idx]; }
-    [[nodiscard]] constexpr const T& operator[](size_type idx) const noexcept { return data_[idx]; }
+    [[nodiscard]] constexpr T& operator[](size_type idx) noexcept {
+        assert(idx < size_ && "operator[] index out of bounds");
+        return data_[idx];
+    }
+    [[nodiscard]] constexpr const T& operator[](size_type idx) const noexcept {
+        assert(idx < size_ && "operator[] index out of bounds");
+        return data_[idx];
+    }
 
-    [[nodiscard]] constexpr T& front() noexcept { return data_[0]; }
-    [[nodiscard]] constexpr const T& front() const noexcept { return data_[0]; }
+    [[nodiscard]] constexpr T& front() noexcept { assert(size_ > 0 && "front() on empty vec"); return data_[0]; }
+    [[nodiscard]] constexpr const T& front() const noexcept { assert(size_ > 0 && "front() on empty vec"); return data_[0]; }
 
-    [[nodiscard]] constexpr T& back() noexcept { return data_[size_ - 1]; }
-    [[nodiscard]] constexpr const T& back() const noexcept { return data_[size_ - 1]; }
+    [[nodiscard]] constexpr T& back() noexcept { assert(size_ > 0 && "back() on empty vec"); return data_[size_ - 1]; }
+    [[nodiscard]] constexpr const T& back() const noexcept { assert(size_ > 0 && "back() on empty vec"); return data_[size_ - 1]; }
 
     [[nodiscard]] constexpr T* data() noexcept { return data_.data(); }
     [[nodiscard]] constexpr const T* data() const noexcept { return data_.data(); }

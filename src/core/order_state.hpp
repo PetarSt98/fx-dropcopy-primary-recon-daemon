@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <type_traits>
-#include <cassert>
 
 #include "core/exec_event.hpp"
 #include "core/order_lifecycle.hpp"
@@ -86,12 +87,11 @@ inline OrderState* create_order_state(util::Arena& arena, OrderKey key) noexcept
     if (!mem) {
         return nullptr;
     }
-    std::memset(mem, 0, sizeof(OrderState));
-    auto* state = static_cast<OrderState*>(mem);
+    // Placement new starts the object's lifetime and value-initialises
+    // every member to its default (all zeroes / default enum values),
+    // eliminating the need for a separate memset.
+    auto* state = ::new (mem) OrderState{};
     state->key = key;
-    state->internal_status = OrdStatus::Unknown;
-    state->dropcopy_status = OrdStatus::Unknown;
-    state->recon_state = ReconState::Unknown;
     return state;
 }
 
@@ -158,7 +158,10 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     std::int64_t px_tolerance
 ) noexcept {
     PERF_SCOPE(::util::PerfCounterId::MismatchCompute);
-    
+
+    assert(qty_tolerance >= 0 && "qty_tolerance must be non-negative");
+    assert(px_tolerance >= 0 && "px_tolerance must be non-negative");
+
     MismatchMask m{};
 
     // Existence mismatch: if one side seen but not the other

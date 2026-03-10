@@ -117,7 +117,8 @@ inline void cancel_recon_deadline(OrderState& os) noexcept {
 //
 // SCENARIO 3: Handling timer expiry
 //
-//     void Reconciler::on_deadline_expired(OrderKey key, uint32_t scheduled_gen) {
+//     void Reconciler::on_deadline_expired(OrderKey key, uint32_t scheduled_gen,
+//                                          uint64_t now_tsc) {
 //         OrderState* os = store_.find(key);
 //         if (!os) return;  // Order was recycled
 //
