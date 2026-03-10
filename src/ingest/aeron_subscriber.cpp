@@ -1,11 +1,21 @@
 #include "ingest/aeron_subscriber.hpp"
 
+#include <cstring>
 #include <thread>
 
+#include "util/cpu_relax.hpp"
 #include "util/rdtsc.hpp"
 #include "util/perf_macros.hpp"
 
 namespace ingest {
+
+namespace {
+
+inline void inc_relaxed(std::atomic<std::size_t>& counter) noexcept {
+    counter.store(counter.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+}
+
+} // namespace
 
 AeronSubscriber::AeronSubscriber(std::string channel,
                                  std::int32_t stream_id,
@@ -37,18 +47,23 @@ AeronSubscriber::AeronSubscriber(std::string channel,
     , client_(std::move(client))
     , stop_flag_(stop_flag) {}
 
-void AeronSubscriber::run() {
+void AeronSubscriber::run() noexcept {
     using namespace aeron;
     constexpr int fragment_limit = 10;
 
-    const auto registration_id = client_->add_subscription(channel_, stream_id_);
-
     std::shared_ptr<SubscriptionView> subscription;
-    while (!stop_flag_.load(std::memory_order_acquire) && !subscription) {
-        subscription = client_->find_subscription(registration_id);
-        if (!subscription) {
-            std::this_thread::yield();
+    try {
+        const auto registration_id = client_->add_subscription(channel_, stream_id_);
+
+        while (!stop_flag_.load(std::memory_order_acquire) && !subscription) {
+            subscription = client_->find_subscription(registration_id);
+            if (!subscription) {
+                std::this_thread::yield();
+            }
         }
+    } catch (...) {
+        stats_.setup_failed.store(true, std::memory_order_release);
+        return;
     }
 
     if (!subscription) {
@@ -60,36 +75,32 @@ void AeronSubscriber::run() {
                        aeron::util::index_t length,
                        const concurrent::logbuffer::Header&) {
         if (length != static_cast<aeron::util::index_t>(sizeof(core::WireExecEvent))) {
-            ++stats_.parse_failures;
+            inc_relaxed(stats_.parse_failures);
             return;
         }
 
-        const auto* wire = reinterpret_cast<const core::WireExecEvent*>(buffer.buffer() + offset);
-        const core::ExecEvent evt = core::from_wire(*wire, source_, ::util::rdtsc());
-        if (!ring_.try_push(evt)) {
-            ++stats_.drops;
-        } else {
-            ++stats_.produced;
+        auto* slot = ring_.try_reserve();
+        if (!slot) {
+            inc_relaxed(stats_.drops);
+            return;
         }
+
+        core::WireExecEvent wire;
+        std::memcpy(&wire, buffer.buffer() + offset, sizeof(core::WireExecEvent));
+        *slot = core::from_wire(wire, source_, ::util::rdtsc());
+        ring_.commit();
+        inc_relaxed(stats_.produced);
     };
 
-    int idle_count = 0;
     while (!stop_flag_.load(std::memory_order_acquire)) {
         PERF_START(aeron_poll);
         const int fragments = subscription->poll(handler, fragment_limit);
         if (fragments > 0) {
             PERF_STOP(aeron_poll, ::util::PerfCounterId::AeronPoll);
         }
-        
+
         if (fragments == 0) {
-            if (idle_count < 32) {
-                ++idle_count;
-            } else {
-                idle_count = 0;
-                std::this_thread::yield();
-            }
-        } else {
-            idle_count = 0;
+            ::util::cpu_relax();
         }
     }
 }

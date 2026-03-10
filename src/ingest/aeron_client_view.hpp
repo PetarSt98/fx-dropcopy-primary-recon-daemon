@@ -1,10 +1,9 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 #include <aeron/Aeron.h>
 #include <concurrent/AtomicBuffer.h>
@@ -13,10 +12,43 @@
 
 namespace ingest {
 
-using FragmentHandler = std::function<void(const aeron::concurrent::AtomicBuffer&,
-                                           aeron::util::index_t,
-                                           aeron::util::index_t,
-                                           const aeron::concurrent::logbuffer::Header&)>;
+// Non-owning type-erased callable reference (16 bytes, no heap allocation).
+// Replaces std::function to eliminate type-erasure overhead in the hot poll path.
+// The referenced callable must outlive the FragmentHandler instance.
+class FragmentHandler {
+public:
+    template <typename F,
+              typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, FragmentHandler>>>
+    FragmentHandler(F& callable) noexcept
+        : obj_(static_cast<void*>(std::addressof(callable)))
+        , invoke_(&invoke_impl<F>) {}
+
+    void operator()(const aeron::concurrent::AtomicBuffer& buffer,
+                    aeron::util::index_t offset,
+                    aeron::util::index_t length,
+                    const aeron::concurrent::logbuffer::Header& header) const {
+        invoke_(obj_, buffer, offset, length, header);
+    }
+
+private:
+    using InvokeFn = void(*)(void*,
+                             const aeron::concurrent::AtomicBuffer&,
+                             aeron::util::index_t,
+                             aeron::util::index_t,
+                             const aeron::concurrent::logbuffer::Header&);
+
+    template <typename F>
+    static void invoke_impl(void* obj,
+                            const aeron::concurrent::AtomicBuffer& buffer,
+                            aeron::util::index_t offset,
+                            aeron::util::index_t length,
+                            const aeron::concurrent::logbuffer::Header& header) {
+        (*static_cast<F*>(obj))(buffer, offset, length, header);
+    }
+
+    void* obj_;
+    InvokeFn invoke_;
+};
 
 class SubscriptionView {
 public:

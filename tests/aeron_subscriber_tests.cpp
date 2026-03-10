@@ -112,7 +112,7 @@ TEST_F(AeronSubscriberTest, SubscriberDeliversFragment) {
     ThreadJoiner joiner{t};
 
     const auto deadline = std::chrono::steady_clock::now() + kMaxWait;
-    while (stats.produced == 0 && std::chrono::steady_clock::now() < deadline) {
+    while (stats.produced.load(std::memory_order_relaxed) == 0 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(kWaitInterval);
     }
 
@@ -122,7 +122,7 @@ TEST_F(AeronSubscriberTest, SubscriberDeliversFragment) {
 
     core::ExecEvent evt{};
     ASSERT_TRUE(ring->try_pop(evt));
-    EXPECT_EQ(stats.produced, 1);
+    EXPECT_EQ(stats.produced.load(std::memory_order_relaxed), 1u);
     EXPECT_EQ(std::string_view(evt.exec_id, evt.exec_id_len), "EX1");
 }
 
@@ -141,14 +141,14 @@ TEST_F(AeronSubscriberTest, SubscriberCountsParseFailure) {
     ThreadJoiner joiner{t};
 
     const auto deadline = std::chrono::steady_clock::now() + kMaxWait;
-    while (stats.parse_failures == 0 && std::chrono::steady_clock::now() < deadline) {
+    while (stats.parse_failures.load(std::memory_order_relaxed) == 0 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(kWaitInterval);
     }
 
     stop.store(true, std::memory_order_release);
 
     ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "Timed out waiting for parse failure";
-    EXPECT_EQ(stats.parse_failures, 1);
+    EXPECT_EQ(stats.parse_failures.load(std::memory_order_relaxed), 1u);
     EXPECT_EQ(ring->size_approx(), 0u);
 }
 

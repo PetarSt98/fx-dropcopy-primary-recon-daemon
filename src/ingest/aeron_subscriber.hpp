@@ -15,9 +15,10 @@
 namespace ingest {
 
 struct ThreadStats {
-    std::size_t produced{0};
-    std::size_t parse_failures{0};
-    std::size_t drops{0};
+    std::atomic<std::size_t> produced{0};
+    std::atomic<std::size_t> parse_failures{0};
+    std::atomic<std::size_t> drops{0};
+    std::atomic<bool> setup_failed{false};
 };
 
 using Ring = ingest::SpscRing<core::ExecEvent, 1u << 16>;
@@ -40,7 +41,7 @@ public:
                     std::shared_ptr<AeronClientView> client,
                     std::atomic<bool>& stop_flag) noexcept;
 
-    void run();
+    void run() noexcept;
 
 private:
     std::string channel_;

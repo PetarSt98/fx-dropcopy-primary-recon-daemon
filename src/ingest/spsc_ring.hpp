@@ -19,7 +19,7 @@ class alignas(64) SpscRing {
 public:
     SpscRing() : head_(0), tail_(0), buffer_(std::make_unique<T[]>(CapacityPowerOf2)) {}
 
-    bool try_push(const T& v) noexcept {
+    [[nodiscard]] bool try_push(const T& v) noexcept {
         PERF_SCOPE(::util::PerfCounterId::SpscRingPush);
         
         const auto head = head_.load(std::memory_order_relaxed);
@@ -32,7 +32,24 @@ public:
         return true;
     }
 
-    bool try_pop(T& out) noexcept {
+    // Two-phase write: reserve a slot, then commit after writing.
+    // Avoids wasted deserialization work when the ring is full.
+    // Producer-only — must not be called concurrently with try_push.
+    [[nodiscard]] T* try_reserve() noexcept {
+        const auto head = head_.load(std::memory_order_relaxed);
+        const auto next_head = increment(head);
+        if (next_head == tail_.load(std::memory_order_acquire)) {
+            return nullptr;
+        }
+        pending_head_ = next_head;
+        return &buffer_[head];
+    }
+
+    void commit() noexcept {
+        head_.store(pending_head_, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool try_pop(T& out) noexcept {
         PERF_SCOPE(::util::PerfCounterId::SpscRingPop);
         
         const auto tail = tail_.load(std::memory_order_relaxed);
@@ -58,6 +75,7 @@ private:
     }
 
     alignas(64) std::atomic<std::size_t> head_;
+    std::size_t pending_head_{0};
     alignas(64) std::atomic<std::size_t> tail_;
     std::unique_ptr<T[]> buffer_;
 };

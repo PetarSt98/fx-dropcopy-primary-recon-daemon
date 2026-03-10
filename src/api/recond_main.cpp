@@ -106,10 +106,14 @@ int main(int argc, char** argv) {
     dropcopy_thread.join();
     recon_thread.join();
 
-    LOG_SLOW_INFO("Primary produced=%zu drops=%zu parse_failures=%zu", primary_stats.produced, primary_stats.drops,
-                  primary_stats.parse_failures);
-    LOG_SLOW_INFO("DropCopy produced=%zu drops=%zu parse_failures=%zu", dropcopy_stats.produced, dropcopy_stats.drops,
-                  dropcopy_stats.parse_failures);
+    LOG_SLOW_INFO("Primary produced=%zu drops=%zu parse_failures=%zu",
+                  primary_stats.produced.load(std::memory_order_relaxed),
+                  primary_stats.drops.load(std::memory_order_relaxed),
+                  primary_stats.parse_failures.load(std::memory_order_relaxed));
+    LOG_SLOW_INFO("DropCopy produced=%zu drops=%zu parse_failures=%zu",
+                  dropcopy_stats.produced.load(std::memory_order_relaxed),
+                  dropcopy_stats.drops.load(std::memory_order_relaxed),
+                  dropcopy_stats.parse_failures.load(std::memory_order_relaxed));
     LOG_SLOW_INFO("Reconciler processed internal=%llu dropcopy=%llu divergences=%llu ring_drops=%llu",
                   static_cast<unsigned long long>(counters.internal_events),
                   static_cast<unsigned long long>(counters.dropcopy_events),
