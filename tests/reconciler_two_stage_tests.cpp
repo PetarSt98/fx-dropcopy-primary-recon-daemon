@@ -71,6 +71,15 @@ protected:
         case core::OrdStatus::PartiallyFilled:
             ev.exec_type = core::ExecType::PartialFill;
             break;
+        case core::OrdStatus::Canceled:
+            ev.exec_type = core::ExecType::Cancel;
+            break;
+        case core::OrdStatus::Replaced:
+            ev.exec_type = core::ExecType::Replace;
+            break;
+        case core::OrdStatus::Rejected:
+            ev.exec_type = core::ExecType::Rejected;
+            break;
         default:
             ev.exec_type = core::ExecType::New;
             break;
@@ -1132,6 +1141,368 @@ TEST_F(ReconcilerTwoStageTest, RecycleOrderCounterIncrements) {
     h.reconciler->process_event_for_test(d_ev);
 
     EXPECT_EQ(h.counters.orders_recycled, 1u);
+}
+
+// ============================================================================
+// Wire-event transition tests: Direct cancel (no CancelPending intermediate)
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, DirectCancel_WorkingToCanceled_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Working → Canceled (direct, no CancelPending)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 0, ts, "DC1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 0, ts + 100, "DC1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 0, 0, ts + 200, "DC1", "EX3"));
+
+    // DropCopy: same path
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 0, ts + 50, "DC1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 0, ts + 150, "DC1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 0, 0, ts + 250, "DC1", "EX3"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, DirectCancel_NewToCanceled_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Canceled (immediate cancel ack from venue)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 0, ts, "DC2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 0, 0, ts + 100, "DC2", "EX2"));
+
+    // DropCopy: same
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 0, ts + 50, "DC2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 0, 0, ts + 150, "DC2", "EX2"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, DirectCancel_PartiallyFilledToCanceled_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Working → PartiallyFilled → Canceled (cancel remaining)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 5000, ts, "DC3", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 5000, ts + 100, "DC3", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::PartiallyFilled, 50, 5000, ts + 200, "DC3", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 50, 5000, ts + 300, "DC3", "EX4"));
+
+    // DropCopy: same path
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 5000, ts + 50, "DC3", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 5000, ts + 150, "DC3", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::PartiallyFilled, 50, 5000, ts + 250, "DC3", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 50, 5000, ts + 350, "DC3", "EX4"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+// ============================================================================
+// Wire-event transition tests: Replace flows
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, ReplaceFlow_WorkingReplacedFilled_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Working → Replaced → Filled (amend then fill)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 5000, ts, "RPL1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 5000, ts + 100, "RPL1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5100, ts + 200, "RPL1", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Filled, 100, 5100, ts + 300, "RPL1", "EX4"));
+
+    // DropCopy: same path
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 5000, ts + 50, "RPL1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 5000, ts + 150, "RPL1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 250, "RPL1", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 5100, ts + 350, "RPL1", "EX4"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, IdempotentReplace_DoubleAmend_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: Working → Replaced → Replaced → Filled (double amend)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 5000, ts, "RPL2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5100, ts + 100, "RPL2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5200, ts + 200, "RPL2", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Filled, 100, 5200, ts + 300, "RPL2", "EX4"));
+
+    // DropCopy: same
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 5000, ts + 50, "RPL2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 150, "RPL2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5200, ts + 250, "RPL2", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 5200, ts + 350, "RPL2", "EX4"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, DirectReplace_NewToReplaced_ThenCanceled) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Replaced → Canceled (amend then cancel)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 5000, ts, "RPL3", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5100, ts + 100, "RPL3", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 0, 5100, ts + 200, "RPL3", "EX3"));
+
+    // DropCopy: same path
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 5000, ts + 50, "RPL3", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 150, "RPL3", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 0, 5100, ts + 250, "RPL3", "EX3"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+// ============================================================================
+// Wire-event transition tests: Rejection paths
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, Rejected_FromPartiallyFilled_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → PartiallyFilled → Rejected (venue rejects remaining)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 5000, ts, "REJ1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::PartiallyFilled, 30, 5000, ts + 100, "REJ1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Rejected, 30, 5000, ts + 200, "REJ1", "EX3"));
+
+    // DropCopy: same
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 5000, ts + 50, "REJ1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::PartiallyFilled, 30, 5000, ts + 150, "REJ1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Rejected, 30, 5000, ts + 250, "REJ1", "EX3"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, Rejected_FromReplaced_BothSidesMatch) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: Working → Replaced → Rejected
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 5000, ts, "REJ2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5100, ts + 100, "REJ2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Rejected, 0, 5100, ts + 200, "REJ2", "EX3"));
+
+    // DropCopy: same
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 5000, ts + 50, "REJ2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 150, "REJ2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Rejected, 0, 5100, ts + 250, "REJ2", "EX3"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+// ============================================================================
+// Status mismatch during grace: Primary cancels, DropCopy delayed
+// Exercises grace period resolution with new transitions.
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, GraceResolution_PrimaryCancelsFirst_DropCopyCatchesUp) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: New → Working → Canceled
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::New, 0, 0, ts, "GR1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 0, ts + 100, "GR1", "EX2"));
+
+    // DropCopy: New → Working (arrives before Primary cancel)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::New, 0, 0, ts + 50, "GR1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 0, ts + 150, "GR1", "EX2"));
+
+    // Primary cancels → temporary status mismatch (Canceled vs Working)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 0, 0, ts + 300, "GR1", "EX3"));
+
+    // At this point, a grace period should be active (STATUS mismatch)
+    EXPECT_GE(h.counters.mismatch_observed, 1u);
+
+    // DropCopy catches up → mismatch resolves within grace
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 0, 0, ts + 400, "GR1", "EX3"));
+
+    EXPECT_GE(h.counters.false_positive_avoided, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+TEST_F(ReconcilerTwoStageTest, GraceResolution_PrimaryReplacesFirst_DropCopyCatchesUp) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: Working → Replaced → Filled
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 5000, ts, "GR2", "EX1"));
+
+    // DropCopy: Working (in sync)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 5000, ts + 50, "GR2", "EX1"));
+
+    // Primary replaces (DropCopy still Working → status mismatch)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 0, 5100, ts + 200, "GR2", "EX2"));
+
+    EXPECT_GE(h.counters.mismatch_observed, 1u);
+
+    // DropCopy catches up with replace
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 300, "GR2", "EX2"));
+
+    const auto fp_before = h.counters.false_positive_avoided;
+
+    // Both sides fill
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Filled, 100, 5100, ts + 400, "GR2", "EX3"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 5100, ts + 450, "GR2", "EX3"));
+
+    EXPECT_GE(h.counters.false_positive_avoided, fp_before);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+// ============================================================================
+// apply_internal_exec / apply_dropcopy_exec accept new transitions
+// Verifies the lifecycle layer does NOT reject valid wire transitions.
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, ApplyExec_DirectCancel_NoFalseDivergence) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+    const auto prev_div = h.counters.divergence_total;
+
+    // Send Primary through Working → Canceled (direct) and DropCopy matching
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 0, 0, ts, "AE1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Canceled, 0, 0, ts + 100, "AE1", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Working, 0, 0, ts + 50, "AE1", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Canceled, 0, 0, ts + 150, "AE1", "EX2"));
+
+    // The lifecycle should NOT have flagged a divergence from an invalid transition
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+    EXPECT_EQ(h.counters.divergence_total, prev_div);
+}
+
+TEST_F(ReconcilerTwoStageTest, ApplyExec_PartialFillThenReplace_NoFalseDivergence) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary: PartiallyFilled → Replaced → Filled
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::PartiallyFilled, 30, 5000, ts, "AE2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Replaced, 30, 5100, ts + 100, "AE2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Filled, 100, 5100, ts + 200, "AE2", "EX3"));
+
+    // DropCopy: same
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::PartiallyFilled, 30, 5000, ts + 50, "AE2", "EX1"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 30, 5100, ts + 150, "AE2", "EX2"));
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 5100, ts + 250, "AE2", "EX3"));
+
+    EXPECT_GE(h.counters.orders_matched, 1u);
+    EXPECT_EQ(h.counters.orders_recycled, 1u);
+    EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
+}
+
+// ============================================================================
+// Invalid transition still correctly detected as divergence
+// ============================================================================
+
+TEST_F(ReconcilerTwoStageTest, InvalidTransition_FilledToWorking_EmitsDivergence) {
+    TwoStageHarness h;
+    const std::uint64_t ts = 10000;
+
+    // Primary reaches Filled
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Filled, 100, 5000, ts, "INV1", "EX1"));
+
+    // Send a bogus Working event (Filled → Working is invalid)
+    h.reconciler->process_event_for_test(
+        make_event(core::Source::Primary, core::OrdStatus::Working, 100, 5000, ts + 100, "INV1", "EX2"));
+
+    // Should have produced an immediate DivergedConfirmed via the !ok path
+    EXPECT_GE(h.counters.mismatch_confirmed, 1u);
 }
 
 } // namespace
