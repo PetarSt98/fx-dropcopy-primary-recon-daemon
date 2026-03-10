@@ -416,40 +416,37 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
     const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
 
     if (mismatch.none()) {
-        // Mismatch resolved - false positive avoided
         os->recon_state = ReconState::Matched;
         ++counters_.false_positive_avoided;
         ++counters_.orders_matched;
     } else if (is_gap_suppressed(*os)) {
-    os->recon_state = ReconState::SuppressedByGap;
-    
-    // Only reschedule if we haven't exceeded max suppression time
-    const std::uint64_t suppression_duration = now - os->mismatch_first_seen_tsc;
-    const std::uint64_t max_suppression_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
-    
-    if (suppression_duration < max_suppression_tsc && timer_wheel_) {
-        const bool rescheduled = refresh_recon_deadline(*timer_wheel_, *os, now + util::ns_to_tsc(config_.gap_recheck_period_ns));
-        if (!rescheduled) {
-            ++counters_.timer_overflow;
+        os->recon_state = ReconState::SuppressedByGap;
+
+        const std::uint64_t suppression_duration = now - os->mismatch_first_seen_tsc;
+        const std::uint64_t max_suppression_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
+
+        if (suppression_duration < max_suppression_tsc && timer_wheel_) {
+            const bool rescheduled = refresh_recon_deadline(
+                *timer_wheel_, *os,
+                now + util::ns_to_tsc(config_.gap_recheck_period_ns));
+            if (!rescheduled) {
+                ++counters_.timer_overflow;
+                os->recon_state = ReconState::DivergedConfirmed;
+                emit_confirmed_divergence(*os, mismatch, now);
+                ++counters_.mismatch_confirmed;
+            } else {
+                ++counters_.gap_suppressions;
+            }
+        } else {
             os->recon_state = ReconState::DivergedConfirmed;
             emit_confirmed_divergence(*os, mismatch, now);
             ++counters_.mismatch_confirmed;
-            // Fall through to recycling check below
-        } else {
-            ++counters_.gap_suppressions;
         }
     } else {
-        // Max suppression time exceeded - emit divergence
         os->recon_state = ReconState::DivergedConfirmed;
         emit_confirmed_divergence(*os, mismatch, now);
         ++counters_.mismatch_confirmed;
     }
-} else {
-    // Confirmed divergence
-    os->recon_state = ReconState::DivergedConfirmed;
-    emit_confirmed_divergence(*os, mismatch, now);
-    ++counters_.mismatch_confirmed;
-}
 
     // After handling expiry, check if order can now be recycled
     if (is_recyclable(*os)) {

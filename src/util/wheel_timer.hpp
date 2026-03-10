@@ -10,6 +10,10 @@
 #include "util/perf_macros.hpp"
 #include "core/order_state.hpp"  // For OrderKey
 
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    #include <intrin.h>
+#endif
+
 namespace util {
 
 // WheelTimer provides O(1) deadline scheduling for the reconciliation grace period.
@@ -32,80 +36,64 @@ namespace util {
 // Memory: All storage is pre-allocated. No heap allocations after construction.
 class WheelTimer {
 public:
-    // Configuration constants (in nanoseconds, converted to TSC at runtime)
-    static constexpr std::size_t NUM_BUCKETS = 256;           // Power of 2 for fast masking
-    static constexpr std::uint64_t TICK_NS = 1'000'000;       // 1ms per tick (in nanoseconds)
-    static constexpr std::size_t BUCKET_CAPACITY = 1024;      // Max entries per bucket
-    static constexpr std::uint64_t WHEEL_SPAN_NS = NUM_BUCKETS * TICK_NS;  // 256ms total coverage
+    static constexpr std::size_t NUM_BUCKETS = 256;
+    static constexpr std::uint64_t TICK_NS = 1'000'000;        // 1ms per tick
+    static constexpr std::size_t BUCKET_CAPACITY = 1024;
+    static constexpr std::uint64_t WHEEL_SPAN_NS = NUM_BUCKETS * TICK_NS;
 
     static_assert((NUM_BUCKETS & (NUM_BUCKETS - 1)) == 0, "NUM_BUCKETS must be power of 2");
 
-    // Entry stored in each bucket
     struct Entry {
         core::OrderKey key{0};
         std::uint32_t generation{0};
-        std::uint64_t deadline_tsc{0};  // Absolute deadline in TSC cycles
+        std::uint64_t deadline_tsc{0};
     };
 
     static_assert(std::is_trivially_copyable_v<Entry>, "Entry must be trivially copyable");
 
-    // Statistics for monitoring
     struct Stats {
-        std::uint64_t scheduled{0};         // Total schedules attempted
-        std::uint64_t expired{0};           // Entries expired (callback invoked)
-        std::uint64_t rescheduled{0};       // Far-future entries re-scheduled
-        std::uint64_t overflow_dropped{0};  // Entries dropped due to bucket overflow
+        std::uint64_t scheduled{0};
+        std::uint64_t expired{0};
+        std::uint64_t rescheduled{0};
+        std::uint64_t overflow_dropped{0};
     };
 
-    // Default tick duration in TSC cycles when ns_to_tsc fails (e.g., calibration issue).
-    // Formula: TICK_NS * DEFAULT_TSC_FREQ_HZ / NS_PER_SEC
-    // At 3GHz: 1ms (TICK_NS=1,000,000ns) = 3,000,000 cycles
-    // Note: Intermediate multiplication (1e6 * 3e9 = 3e15) fits in uint64_t (max ~1.8e19).
-    static constexpr std::uint64_t DEFAULT_TICK_TSC = 
+    static constexpr std::uint64_t DEFAULT_TICK_TSC =
         (TICK_NS * TscCalibration::DEFAULT_TSC_FREQ_HZ) / TscCalibration::NS_PER_SEC;
 
-    // Constructor - initializes wheel at given starting time (in TSC cycles)
     explicit WheelTimer(std::uint64_t start_tsc = 0) noexcept
         : tick_tsc_(ns_to_tsc(TICK_NS))
-        , current_tick_(tick_tsc_ > 0 ? (start_tsc / tick_tsc_) : 0)
-        , last_poll_tsc_(start_tsc) {
-        // Ensure tick_tsc_ uses sensible fallback to prevent runaway loops
-        // when TSC calibration returns 0 (e.g., initialization order issues)
+        , tick_reciprocal_(0)
+        , current_tick_(0)
+        , last_poll_tsc_(start_tsc)
+    {
         if (tick_tsc_ == 0) {
             tick_tsc_ = DEFAULT_TICK_TSC;
         }
+        tick_reciprocal_ = compute_tick_reciprocal(tick_tsc_);
+        current_tick_ = tsc_to_tick(start_tsc);
     }
 
     // Schedule a deadline for an order.
-    //
-    // Parameters:
-    //   key          - OrderKey identifying the order
-    //   generation   - Current timer_generation from OrderState (for lazy cancellation)
-    //   deadline_tsc - Absolute timestamp (in TSC cycles) when deadline expires
-    //
-    // Returns: true if scheduled successfully, false if bucket overflowed
-    //
-    // Note: Deadlines in the past are placed in the current bucket and will expire
-    // on the next poll_expired() call.
+    // Returns: true if scheduled successfully, false if bucket overflowed.
+    // Deadlines in the past are placed in the current bucket and expire on next poll.
     [[nodiscard]] bool schedule(core::OrderKey key, std::uint32_t generation,
                                 std::uint64_t deadline_tsc) noexcept {
         PERF_SCOPE(::util::PerfCounterId::TimerWheelSchedule);
-        
+
         ++stats_.scheduled;
 
-        const std::uint64_t deadline_tick = deadline_tsc / tick_tsc_;
+        const std::uint64_t deadline_tick = tsc_to_tick(deadline_tsc);
         std::uint64_t delta_ticks = (deadline_tick > current_tick_)
             ? (deadline_tick - current_tick_)
             : 0;
 
-        // Clamp to wheel range (entry stores deadline_tsc for re-check)
         if (delta_ticks >= NUM_BUCKETS) {
             delta_ticks = NUM_BUCKETS - 1;
         }
 
         const std::size_t bucket_idx = (current_tick_ + delta_ticks) & (NUM_BUCKETS - 1);
 
-        // Try to add to bucket
         if (!buckets_[bucket_idx].try_emplace_back(key, generation, deadline_tsc)) {
             ++stats_.overflow_dropped;
             return false;
@@ -115,49 +103,47 @@ public:
     }
 
     // Poll for expired deadlines and invoke callback for each.
-    //
-    // Parameters:
-    //   now_tsc    - Current timestamp (in TSC cycles)
-    //   on_expired - Callback invoked as on_expired(OrderKey key, uint32_t generation)
-    //                Caller MUST check generation against OrderState.timer_generation
-    //                to detect if timer was cancelled (generation mismatch = skip)
-    //
-    // Complexity: O(number of expired entries), NOT O(total scheduled)
+    // Callback signature: on_expired(OrderKey key, uint32_t generation)
+    // Caller MUST check generation against OrderState.timer_generation.
+    // Complexity: O(number of expired entries), NOT O(total scheduled).
     template <typename F>
     void poll_expired(std::uint64_t now_tsc, F&& on_expired) noexcept {
         PERF_SCOPE(::util::PerfCounterId::TimerWheelPollExpired);
-        
-        const std::uint64_t now_tick = now_tsc / tick_tsc_;
 
-        // Process all ticks from last poll to now
+        const std::uint64_t now_tick = tsc_to_tick(now_tsc);
+
         while (current_tick_ < now_tick) {
             const std::size_t bucket_idx = current_tick_ & (NUM_BUCKETS - 1);
             auto& bucket = buckets_[bucket_idx];
 
-            // Process entries - some may need re-scheduling (far-future)
             for (std::size_t i = 0; i < bucket.size(); ) {
                 const auto& entry = bucket[i];
 
                 if (entry.deadline_tsc <= now_tsc) {
-                    // Deadline reached - invoke callback
                     on_expired(entry.key, entry.generation);
                     ++stats_.expired;
                     bucket.swap_erase(i);
-                    // Don't increment i - new entry now at position i
                 } else {
-                    // Far-future entry not yet due - re-schedule
-                    const auto key = entry.key;
-                    const auto gen = entry.generation;
-                    const auto deadline = entry.deadline_tsc;
+                    // Far-future entry not yet due -- move to correct bucket.
+                    // Inlined (not via schedule()) to avoid double-counting stats
+                    // and to guarantee forward progress (delta >= 1).
+                    const auto rkey = entry.key;
+                    const auto rgen = entry.generation;
+                    const auto rdeadline = entry.deadline_tsc;
                     bucket.swap_erase(i);
 
-                    // Re-schedule (may fail if target bucket full)
-                    if (schedule(key, gen, deadline)) {
+                    const std::uint64_t dtick = tsc_to_tick(rdeadline);
+                    std::uint64_t delta = (dtick > current_tick_)
+                        ? (dtick - current_tick_)
+                        : 1;   // floor reciprocal can undercount by 1; force forward
+                    if (delta >= NUM_BUCKETS) delta = NUM_BUCKETS - 1;
+
+                    const std::size_t target = (current_tick_ + delta) & (NUM_BUCKETS - 1);
+                    if (buckets_[target].try_emplace_back(rkey, rgen, rdeadline)) {
                         ++stats_.rescheduled;
+                    } else {
+                        ++stats_.overflow_dropped;
                     }
-                    // Always decrement scheduled to avoid double-counting, even if reschedule failed
-                    --stats_.scheduled;
-                    // Don't increment i
                 }
             }
 
@@ -167,33 +153,28 @@ public:
         last_poll_tsc_ = now_tsc;
     }
 
-    // Advance the wheel without processing expirations.
-    // Use poll_expired() in normal operation; this is for testing/edge cases.
     void advance(std::uint64_t now_tsc) noexcept {
-        const std::uint64_t now_tick = now_tsc / tick_tsc_;
+        const std::uint64_t now_tick = tsc_to_tick(now_tsc);
         if (now_tick > current_tick_) {
             current_tick_ = now_tick;
         }
         last_poll_tsc_ = now_tsc;
     }
 
-    // Reset the wheel (e.g., for end-of-day reset)
     void reset(std::uint64_t start_tsc = 0) noexcept {
         for (auto& bucket : buckets_) {
             bucket.clear();
         }
-        current_tick_ = start_tsc / tick_tsc_;
+        current_tick_ = tsc_to_tick(start_tsc);
         last_poll_tsc_ = start_tsc;
         stats_ = Stats{};
     }
 
-    // Accessors
     [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
     [[nodiscard]] std::uint64_t current_tick() const noexcept { return current_tick_; }
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
     [[nodiscard]] std::uint64_t tick_tsc() const noexcept { return tick_tsc_; }
 
-    // Count total entries across all buckets (O(NUM_BUCKETS), for debugging/monitoring)
     [[nodiscard]] std::size_t total_pending() const noexcept {
         std::size_t total = 0;
         for (const auto& bucket : buckets_) {
@@ -205,11 +186,51 @@ public:
 private:
     using Bucket = FixedCapacityVec<Entry, BUCKET_CAPACITY>;
 
-    std::uint64_t tick_tsc_{1};  // TSC cycles per tick (converted from TICK_NS at construction)
-    std::array<Bucket, NUM_BUCKETS> buckets_{};
+    // Pre-compute floor(2^64 / d) for fast approximate division via mulhi64.
+    // Max error: result may be 1 less than true floor(x / d).
+    // For bucket placement this is safe -- exact deadline_tsc comparison handles precision.
+    static std::uint64_t compute_tick_reciprocal(std::uint64_t d) noexcept {
+        if (d <= 1) return ~std::uint64_t{0};
+#if defined(__SIZEOF_INT128__)
+        return static_cast<std::uint64_t>(
+            (static_cast<__uint128_t>(1) << 64) / d
+        );
+#elif defined(_MSC_VER) && defined(_M_X64)
+        std::uint64_t remainder;
+        return _udiv128(1, 0, d, &remainder);
+#else
+        return 0;  // Signals fallback to plain division
+#endif
+    }
+
+    // Fast approximate division: x / tick_tsc_ via multiply-high.
+    // ~4-5 cycles (mul+shift) vs ~20-40 cycles (div64) on x86-64.
+    [[nodiscard]] std::uint64_t tsc_to_tick(std::uint64_t tsc) const noexcept {
+#if defined(__SIZEOF_INT128__)
+        if (tick_reciprocal_ != 0) {
+            return static_cast<std::uint64_t>(
+                (static_cast<__uint128_t>(tsc) * tick_reciprocal_) >> 64
+            );
+        }
+#elif defined(_MSC_VER) && defined(_M_X64)
+        if (tick_reciprocal_ != 0) {
+            std::uint64_t high;
+            _umul128(tsc, tick_reciprocal_, &high);
+            return high;
+        }
+#endif
+        return tsc / tick_tsc_;
+    }
+
+    // Hot fields on same cache line (accessed every schedule/poll)
+    std::uint64_t tick_tsc_{1};
+    std::uint64_t tick_reciprocal_{0};
     std::uint64_t current_tick_{0};
     std::uint64_t last_poll_tsc_{0};
     Stats stats_{};
+
+    // Cold bulk storage (~6MB, accessed per-bucket)
+    std::array<Bucket, NUM_BUCKETS> buckets_{};
 };
 
 } // namespace util

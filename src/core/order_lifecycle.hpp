@@ -15,22 +15,22 @@ inline constexpr bool is_terminal_status(OrdStatus s) noexcept {
     }
 }
 
-// Validate whether a transition between two OrdStatus values is acceptable for an
-// exchange-grade order lifecycle. Unknown permits any first observation.
+// Validate whether a transition between two OrdStatus values is acceptable.
+// Wire events arrive via Aeron and may skip intermediate states (e.g. direct
+// cancel without CancelPending, or replace on a partially-filled order).
+// Unknown permits any first observation.
 inline bool is_valid_transition(OrdStatus current, OrdStatus next) noexcept {
     using OS = OrdStatus;
 
     if (current == OS::Unknown) {
-        return true; // First observation wins.
+        return true;
     }
 
     if (current == next) {
-        // Idempotent repeats are acceptable (e.g., duplicate drop-copy messages).
         return true;
     }
 
     if (is_terminal_status(current)) {
-        // Terminal states cannot transition back to active lifecycle states.
         return false;
     }
 
@@ -38,18 +38,21 @@ inline bool is_valid_transition(OrdStatus current, OrdStatus next) noexcept {
     case OS::New:
     case OS::PendingNew:
         return next == OS::Working || next == OS::PartiallyFilled || next == OS::Filled ||
-               next == OS::CancelPending || next == OS::Rejected;
+               next == OS::CancelPending || next == OS::Canceled || next == OS::Replaced ||
+               next == OS::Rejected;
     case OS::Working:
         return next == OS::PartiallyFilled || next == OS::Filled || next == OS::CancelPending ||
-               next == OS::Rejected;
+               next == OS::Canceled || next == OS::Replaced || next == OS::Rejected;
     case OS::PartiallyFilled:
-        return next == OS::PartiallyFilled || next == OS::Filled || next == OS::CancelPending;
+        return next == OS::PartiallyFilled || next == OS::Filled || next == OS::CancelPending ||
+               next == OS::Canceled || next == OS::Replaced || next == OS::Rejected;
     case OS::CancelPending:
         return next == OS::Canceled || next == OS::Rejected || next == OS::PartiallyFilled ||
                next == OS::Filled;
     case OS::Replaced:
         return next == OS::Working || next == OS::PartiallyFilled || next == OS::Filled ||
-               next == OS::CancelPending || next == OS::Rejected;
+               next == OS::CancelPending || next == OS::Canceled || next == OS::Replaced ||
+               next == OS::Rejected;
     default:
         return false;
     }
