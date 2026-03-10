@@ -1418,11 +1418,16 @@ TEST_F(ReconcilerTwoStageTest, GraceResolution_PrimaryReplacesFirst_DropCopyCatc
 
     EXPECT_GE(h.counters.mismatch_observed, 1u);
 
+    const auto fp_before = h.counters.false_positive_avoided;
+
     // DropCopy catches up with replace
     h.reconciler->process_event_for_test(
         make_event(core::Source::DropCopy, core::OrdStatus::Replaced, 0, 5100, ts + 300, "GR2", "EX2"));
 
-    const auto fp_before = h.counters.false_positive_avoided;
+    // Grace period must have resolved at this point
+    EXPECT_EQ(h.counters.false_positive_avoided, fp_before + 1);
+
+    const auto fp_after_catchup = h.counters.false_positive_avoided;
 
     // Both sides fill
     h.reconciler->process_event_for_test(
@@ -1430,7 +1435,8 @@ TEST_F(ReconcilerTwoStageTest, GraceResolution_PrimaryReplacesFirst_DropCopyCatc
     h.reconciler->process_event_for_test(
         make_event(core::Source::DropCopy, core::OrdStatus::Filled, 100, 5100, ts + 450, "GR2", "EX3"));
 
-    EXPECT_GE(h.counters.false_positive_avoided, fp_before);
+    // Primary Filled creates another status mismatch; DropCopy Filled resolves it
+    EXPECT_EQ(h.counters.false_positive_avoided, fp_after_catchup + 1);
     EXPECT_EQ(h.counters.orders_recycled, 1u);
     EXPECT_EQ(h.counters.mismatch_confirmed, 0u);
 }
