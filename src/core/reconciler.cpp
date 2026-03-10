@@ -178,16 +178,13 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
 
         // Handle state transition based on mismatch
         handle_recon_state_transition(*st, new_mismatch, now_tsc);
-    } else if (st->seen_dropcopy) {
-        // Legacy path: immediate emission (backward compatibility / testing).
-        // Guard on seen_dropcopy preserves the original classify_divergence
-        // semantics which returned false when dropcopy had not been seen yet.
-        const MismatchMask mm = compute_mismatch(*st, config_.qty_tolerance, config_.px_tolerance);
-        if (mm.any()) {
-            Divergence div{};
-            fill_divergence_snapshot(*st, classify_divergence_type(*st, mm), div);
-            div.detect_tsc = now_tsc;
-            div.mismatch_mask = mm.bits();
+    } else {
+        // Legacy path: immediate emission via classify_divergence which has
+        // its own seen_dropcopy guard, MissingFill classification, and does
+        // not compare exec IDs -- preserving backward-compatible semantics.
+        Divergence div{};
+        if (classify_divergence(*st, div, config_.qty_tolerance,
+                                config_.px_tolerance, config_.timing_slack_ns)) {
             if (!divergence_ring_.try_push(div)) {
                 ++counters_.divergence_ring_drops;
                 LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
