@@ -66,8 +66,8 @@ public:
         reconciler_->set_last_poll_tsc_for_test(now_tsc);
         
         // Poll expired timers
-        timer_wheel_.poll_expired(now_tsc, [this](core::OrderKey key, std::uint32_t gen) {
-            reconciler_->on_grace_deadline_expired(key, gen);
+        timer_wheel_.poll_expired(now_tsc, [this, now_tsc](core::OrderKey key, std::uint32_t gen) {
+            reconciler_->on_grace_deadline_expired(key, gen, now_tsc);
         });
     }
 

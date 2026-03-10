@@ -42,56 +42,43 @@ inline OrderKey make_order_key(const ExecEvent& evt) noexcept {
 struct OrderState {
     OrderKey key{0};
 
-    // Internal (primary) view.
+    // === Hot comparison fields (compute_mismatch reads all of these) ===
+    // Grouped together so the primary mismatch check fits in a single cache line.
     OrdStatus internal_status{OrdStatus::Unknown};
+    OrdStatus dropcopy_status{OrdStatus::Unknown};
+    bool seen_internal{false};
+    bool seen_dropcopy{false};
+
     std::int64_t internal_cum_qty{0};
+    std::int64_t dropcopy_cum_qty{0};
     std::int64_t internal_avg_px{0};
+    std::int64_t dropcopy_avg_px{0};
     std::uint64_t last_internal_ts{0};
+    std::uint64_t last_dropcopy_ts{0};
+
+    // === Exec ID comparison (hot but larger, checked last in mismatch) ===
     char last_internal_exec_id[ExecEvent::id_capacity]{};
     std::uint8_t last_internal_exec_id_len{0};
-
-    // Drop-copy view.
-    OrdStatus dropcopy_status{OrdStatus::Unknown};
-    std::int64_t dropcopy_cum_qty{0};
-    std::int64_t dropcopy_avg_px{0};
-    std::uint64_t last_dropcopy_ts{0};
     char last_dropcopy_exec_id[ExecEvent::id_capacity]{};
     std::uint8_t last_dropcopy_exec_id_len{0};
 
-    // Bookkeeping.
-    bool seen_internal{false};
-    bool seen_dropcopy{false};
-    bool has_divergence{false};
-    bool has_gap{false};
-    std::uint32_t divergence_count{0};
-
-    // ===== Reconciliation overlay (FX-7051) =====
-    // Tracks reconciliation lifecycle separately from FIX execution state.
+    // === Reconciliation overlay ===
     std::uint64_t primary_last_seen_tsc{0};
     std::uint64_t dropcopy_last_seen_tsc{0};
     std::uint64_t mismatch_first_seen_tsc{0};
     std::uint64_t recon_deadline_tsc{0};
 
     ReconState recon_state{ReconState::Unknown};
-    MismatchMask current_mismatch{};      // 1-byte mask
-
-    std::uint32_t timer_generation{0};    // generation-based lazy cancel
-    std::uint32_t gap_suppression_epoch{0};  // Using uint32_t to match SequenceTracker::gap_epoch
-                                             // IMPORTANT: Value 0 is reserved as sentinel (means "not flagged")
-
-    // ===== FX-7054: Per-order gap uncertainty flags =====
-    // Bitmask indicating which session gaps affect this order's reconciliation
-    // Bit 0: Primary session gap uncertainty
-    // Bit 1: DropCopy session gap uncertainty
-    // Bits 2-7: Reserved for additional sessions
+    MismatchMask current_mismatch{};
     std::uint8_t gap_uncertainty_flags{0};
 
-    // ===== Divergence emission tracking (FX-7053) =====
-    // These fields support idempotent divergence emission to avoid flooding
-    // the downstream divergence queue with repeated identical events.
-    std::uint64_t last_divergence_emit_tsc{0};  // When last divergence was emitted (0 = never)
-    MismatchMask last_emitted_mismatch{};       // What mismatch bits were last emitted
-    std::uint32_t divergence_emit_count{0};     // Total divergences emitted for this order (lifetime)
+    std::uint32_t timer_generation{0};
+    std::uint32_t gap_suppression_epoch{0};
+
+    // === Divergence emission tracking ===
+    std::uint64_t last_divergence_emit_tsc{0};
+    MismatchMask last_emitted_mismatch{};
+    std::uint32_t divergence_emit_count{0};
 };
 
 inline OrderState* create_order_state(util::Arena& arena, OrderKey key) noexcept {
@@ -124,8 +111,6 @@ inline bool apply_internal_exec(OrderState& state, const ExecEvent& ev) noexcept
 #endif
     const OrdStatus next = ev.ord_status;
     if (!apply_status_transition(state.internal_status, next)) {
-        state.has_divergence = true;
-        ++state.divergence_count;
         return false;
     }
 
@@ -148,8 +133,6 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
 #endif
     const OrdStatus next = ev.ord_status;
     if (!apply_status_transition(state.dropcopy_status, next)) {
-        state.has_divergence = true;
-        ++state.divergence_count;
         return false;
     }
 
@@ -165,61 +148,10 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     return true;
 }
 
-// Mismatch computation for hot path (conditionally instrumented when FX_PERF_ENABLED).
-// No tolerance parameters in this version (tolerance/config comes in FX-7053/FX-7200).
-[[nodiscard]] inline MismatchMask compute_mismatch(const OrderState& os) noexcept {
-    PERF_SCOPE(::util::PerfCounterId::MismatchCompute);
-    
-    MismatchMask m{};
-
-    // Existence mismatch: if one side seen but not the other
-    if (os.seen_internal != os.seen_dropcopy) {
-        m.set(MismatchMask::EXISTENCE);
-        return m;  // Early return on existence mismatch
-    }
-
-    // If neither side seen, return empty mask
-    if (!os.seen_internal && !os.seen_dropcopy) {
-        return m;
-    }
-
-    // Both sides seen: compare fields
-
-    // Status mismatch
-    if (os.internal_status != os.dropcopy_status) {
-        m.set(MismatchMask::STATUS);
-    }
-
-    // CumQty mismatch
-    if (os.internal_cum_qty != os.dropcopy_cum_qty) {
-        m.set(MismatchMask::CUM_QTY);
-    }
-
-    // LEAVES_QTY: Not computed in v1 because total order qty (order_qty) is not tracked
-    // in OrderState. Future implementation will either compute leaves_qty
-    // as (order_qty - cum_qty) or compare directly-reported leaves_qty values
-    // from both feeds once order_qty tracking is added.
-
-    // AvgPx mismatch
-    if (os.internal_avg_px != os.dropcopy_avg_px) {
-        m.set(MismatchMask::AVG_PX);
-    }
-
-    // ExecID mismatch: compare lengths first, then content if both are populated
-    if (os.last_internal_exec_id_len != os.last_dropcopy_exec_id_len) {
-        m.set(MismatchMask::EXEC_ID);
-    } else if (os.last_internal_exec_id_len > 0 && os.last_dropcopy_exec_id_len > 0) {
-        if (std::memcmp(os.last_internal_exec_id, os.last_dropcopy_exec_id, 
-                        os.last_internal_exec_id_len) != 0) {
-            m.set(MismatchMask::EXEC_ID);
-        }
-    }
-
-    return m;
-}
+// Zero-tolerance overload delegates to the parameterized version.
+[[nodiscard]] inline MismatchMask compute_mismatch(const OrderState& os) noexcept;
 
 // Mismatch computation with tolerance parameters (conditionally instrumented when FX_PERF_ENABLED).
-// Tolerances allow for minor differences without triggering mismatches.
 [[nodiscard]] inline MismatchMask compute_mismatch(
     const OrderState& os,
     std::int64_t qty_tolerance,
@@ -272,33 +204,31 @@ inline bool apply_dropcopy_exec(OrderState& state, const ExecEvent& ev) noexcept
     return m;
 }
 
+[[nodiscard]] inline MismatchMask compute_mismatch(const OrderState& os) noexcept {
+    return compute_mismatch(os, 0, 0);
+}
+
 // Check if a divergence should be emitted or deduplicated.
 // Returns true if enough time has passed since last emission with same mismatch.
 // Returns false if this would be a duplicate (suppress emission).
-// Note: dedup_window_ns is in nanoseconds but now_tsc is in TSC cycles
+// dedup_window_tsc is pre-computed TSC cycles (caller converts from ns once at init).
 [[nodiscard]] inline bool should_emit_divergence(
     const OrderState& os,
     MismatchMask current_mismatch,
     std::uint64_t now_tsc,
-    std::uint64_t dedup_window_ns
+    std::uint64_t dedup_window_tsc
 ) noexcept {
-    // Always emit if mismatch changed
     if (current_mismatch != os.last_emitted_mismatch) {
         return true;
     }
 
-    // Always emit if never emitted before
     if (os.last_divergence_emit_tsc == 0) {
         return true;
     }
 
-    // Deduplicate if same mismatch within window
-    // Guard against underflow if now_tsc < last_divergence_emit_tsc (e.g., TSC rollover)
     if (now_tsc < os.last_divergence_emit_tsc) {
-        return true;  // Emit to be safe on clock anomaly
+        return true;
     }
-    // Convert nanoseconds window to TSC cycles for correct comparison
-    const std::uint64_t dedup_window_tsc = util::ns_to_tsc(dedup_window_ns);
     return (now_tsc - os.last_divergence_emit_tsc) >= dedup_window_tsc;
 }
 

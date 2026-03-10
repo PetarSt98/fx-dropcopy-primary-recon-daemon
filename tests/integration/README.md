@@ -119,8 +119,8 @@ core::Reconciler recon(stop_flag, *primary_ring, *dropcopy_ring, store, counters
 std::thread timer_thread([&] {
     while (!stop_flag.load(std::memory_order_acquire)) {
         auto now = util::rdtsc();
-        timer_wheel.poll_expired(now, [&](core::OrderKey key, std::uint32_t gen) {
-            recon.on_grace_deadline_expired(key, gen);
+        timer_wheel.poll_expired(now, [&, now](core::OrderKey key, std::uint32_t gen) {
+            recon.on_grace_deadline_expired(key, gen, now);
         });
         std::this_thread::sleep_for(std::chrono::milliseconds{10});
     }

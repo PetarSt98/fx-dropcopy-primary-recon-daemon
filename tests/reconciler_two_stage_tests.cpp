@@ -10,6 +10,7 @@
 #include "core/recon_config.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
+#include "util/rdtsc.hpp"
 #include "util/wheel_timer.hpp"
 
 namespace {
@@ -227,7 +228,7 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_SkipsStaleTimer) {
     os->timer_generation = 5;
 
     // Call with stale generation (should be skipped)
-    h.reconciler->on_grace_deadline_expired(key, 3);  // Stale gen = 3
+    h.reconciler->on_grace_deadline_expired(key, 3, util::rdtsc());  // Stale gen = 3
 
     EXPECT_EQ(h.counters.stale_timers_skipped, 1u);
 }
@@ -256,32 +257,6 @@ TEST_F(ReconcilerTwoStageTest, NewConstructorWithNullTimerWheel) {
         *seq_gap_ring,
         nullptr,  // No timer wheel
         config);
-
-    // Should compile and construct without issues
-    SUCCEED();
-}
-
-// Reconciler_BackwardCompatibility - Old constructor still works
-TEST_F(ReconcilerTwoStageTest, BackwardCompatibility) {
-    std::atomic<bool> stop_flag{false};
-    // Allocate large ring buffers on heap to avoid stack overflow
-    auto primary_ring = std::make_unique<ExecRing>();
-    auto dropcopy_ring = std::make_unique<ExecRing>();
-    auto divergence_ring = std::make_unique<core::DivergenceRing>();
-    auto seq_gap_ring = std::make_unique<core::SequenceGapRing>();
-    util::Arena arena{util::Arena::default_capacity_bytes};
-    core::OrderStateStore store{arena, 128};
-    core::ReconCounters counters{};
-
-    // Use old constructor (backward compatibility)
-    core::Reconciler reconciler(
-        stop_flag,
-        *primary_ring,
-        *dropcopy_ring,
-        store,
-        counters,
-        *divergence_ring,
-        *seq_gap_ring);
 
     // Should compile and construct without issues
     SUCCEED();
@@ -347,7 +322,7 @@ TEST_F(ReconcilerTwoStageTest, HelperMethodsAreNoexcept) {
                   "enter_grace_period must be noexcept");
     static_assert(noexcept(h.reconciler->exit_grace_period(os, 0)),
                   "exit_grace_period must be noexcept");
-    static_assert(noexcept(h.reconciler->on_grace_deadline_expired(0, 0)),
+    static_assert(noexcept(h.reconciler->on_grace_deadline_expired(0, 0, 0)),
                   "on_grace_deadline_expired must be noexcept");
     static_assert(noexcept(h.reconciler->emit_confirmed_divergence(os, mismatch, 0)),
                   "emit_confirmed_divergence must be noexcept");
@@ -486,7 +461,7 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_GraceExpires_DivergenceConfirmed) {
     EXPECT_EQ(os->recon_state, core::ReconState::InGrace);
 
     // Simulate timer expiration by calling on_grace_deadline_expired directly
-    h.reconciler->on_grace_deadline_expired(key, os->timer_generation);
+    h.reconciler->on_grace_deadline_expired(key, os->timer_generation, util::rdtsc());
 
     EXPECT_EQ(os->recon_state, core::ReconState::DivergedConfirmed);
     EXPECT_EQ(h.counters.mismatch_confirmed, 1u);
@@ -558,7 +533,7 @@ TEST_F(ReconcilerTwoStageTest, TwoStage_DivergedThenResolved_ReturnsToMatched) {
     ASSERT_NE(os, nullptr);
 
     // Confirm divergence via timer expiration
-    h.reconciler->on_grace_deadline_expired(key, os->timer_generation);
+    h.reconciler->on_grace_deadline_expired(key, os->timer_generation, util::rdtsc());
     EXPECT_EQ(os->recon_state, core::ReconState::DivergedConfirmed);
 
     // Now dropcopy catches up - use same exec_id!
@@ -689,7 +664,7 @@ TEST_F(ReconcilerTwoStageTest, HandleReconStateTransition_IsNoexcept) {
 TEST_F(ReconcilerTwoStageTest, IsGapSuppressed_EpochMaskingConsistency) {
     TwoStageHarness h;
     h.config.enable_gap_suppression = true;
-    h.config.gap_close_timeout_ns = 10'000'000'000ULL;  // 10s (long enough to not timeout)
+    h.config.gap_timeout_ns = 10'000'000'000ULL;  // 10s (long enough to not timeout)
     
     // Recreate reconciler with gap suppression enabled
     h.reconciler = std::make_unique<core::Reconciler>(
@@ -758,7 +733,7 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_SkipsWhenStateNotInGrace) {
     os->recon_state = core::ReconState::Matched;
     
     // Timer should be skipped because state is Matched (not InGrace or SuppressedByGap)
-    h.reconciler->on_grace_deadline_expired(key, gen);
+    h.reconciler->on_grace_deadline_expired(key, gen, util::rdtsc());
     
     // Verify timer was skipped
     EXPECT_EQ(h.counters.stale_timers_skipped, 1u);
@@ -816,7 +791,7 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_RespectsQtyTolerance) {
     os->dropcopy_cum_qty = 95;
     
     // Fire timer - it should re-check mismatch with tolerance and find no mismatch
-    h.reconciler->on_grace_deadline_expired(key, gen);
+    h.reconciler->on_grace_deadline_expired(key, gen, util::rdtsc());
     
     // Verify false positive was avoided (mismatch resolved within tolerance)
     EXPECT_EQ(os->recon_state, core::ReconState::Matched);
@@ -867,7 +842,7 @@ TEST_F(ReconcilerTwoStageTest, OnDeadlineExpired_RespectsPxTolerance) {
     os->dropcopy_avg_px = 97;
     
     // Fire timer - it should re-check mismatch with tolerance and find no mismatch
-    h.reconciler->on_grace_deadline_expired(key, gen);
+    h.reconciler->on_grace_deadline_expired(key, gen, util::rdtsc());
     
     // Verify false positive was avoided (mismatch resolved within tolerance)
     EXPECT_EQ(os->recon_state, core::ReconState::Matched);
@@ -1082,7 +1057,7 @@ TEST_F(ReconcilerTwoStageTest, RecycleAfterTimerExpiry_DivergedConfirmed) {
     const auto gen = os->timer_generation;
 
     // Expire the grace timer
-    h.reconciler->on_grace_deadline_expired(key, gen);
+    h.reconciler->on_grace_deadline_expired(key, gen, util::rdtsc());
 
     // Order should be DivergedConfirmed and then recycled (both sides Filled = terminal)
     EXPECT_EQ(h.counters.orders_recycled, 1u);

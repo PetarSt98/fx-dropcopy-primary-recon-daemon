@@ -40,7 +40,6 @@ struct SequenceTracker {
     std::uint64_t gap_last_missing_seq{0};  // Last missing sequence (inclusive, gap_start_seq is first)
     std::uint32_t orders_in_gap_count{0};   // Count of orders marked with this gap's uncertainty
     std::uint64_t gap_end_seq{0};       // End of gap range (exclusive) - seq we jumped to
-    std::uint64_t gap_detected_tsc{0};  // TSC when gap was detected (for timeout)
 };
 
 inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq) noexcept {
@@ -58,7 +57,6 @@ inline bool init_sequence_tracker(SequenceTracker& trk, std::uint64_t first_seq)
     trk.gap_last_missing_seq = 0;
     trk.orders_in_gap_count = 0;
     trk.gap_end_seq = 0;
-    trk.gap_detected_tsc = 0;
     return true;
 }
 
@@ -78,9 +76,7 @@ inline bool close_gap(SequenceTracker& trk) noexcept {
 
     trk.gap_open = false;
     trk.gap_start_seq = 0;
-    // Master branch fields
     trk.gap_end_seq = 0;
-    trk.gap_detected_tsc = 0;
     // FX-7054 fields
     trk.gap_opened_tsc = 0;
     trk.gap_last_missing_seq = 0;
@@ -132,7 +128,6 @@ inline bool track_sequence(SequenceTracker& trk,
         trk.gap_last_missing_seq = seq - 1;        // FX-7054
 
         trk.gap_end_seq = seq;  // The sequence we jumped to (exclusive end of gap)
-        trk.gap_detected_tsc = now_ts;  // Record when gap was detected for timeout
         trk.last_seen_seq = seq;
         trk.expected_seq = seq + 1;
 
