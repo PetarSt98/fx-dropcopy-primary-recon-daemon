@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <iostream>
@@ -11,11 +12,15 @@
 #include <Aeron.h>
 
 #include "core/reconciler.hpp"
+#include "core/recon_config.hpp"
 #include "core/order_state_store.hpp"
 #include "ingest/aeron_subscriber.hpp"
 #include "util/arena.hpp"
 #include "util/async_log.hpp"
 #include "util/perf_counters.hpp"
+#include "util/rdtsc.hpp"
+#include "util/tsc_calibration.hpp"
+#include "util/wheel_timer.hpp"
 
 namespace {
 std::atomic<bool>* g_stop_flag = nullptr;
@@ -41,10 +46,33 @@ int main(int argc, char** argv) {
         LOG_SLOW_ERROR("Failed to start async logger for fx_exec_recond");
     }
 
+    util::TscCalibration::instance().calibrate_blocking();
+    LOG_SLOW_INFO("TSC calibrated: freq=%llu Hz calibrated=%d",
+                  static_cast<unsigned long long>(util::TscCalibration::instance().tsc_freq_hz()),
+                  static_cast<int>(util::TscCalibration::instance().is_calibrated()));
+
     const std::string primary_channel = argv[1];
-    const std::int32_t primary_stream = static_cast<std::int32_t>(std::stoi(argv[2]));
     const std::string dropcopy_channel = argv[3];
-    const std::int32_t dropcopy_stream = static_cast<std::int32_t>(std::stoi(argv[4]));
+
+    char* end = nullptr;
+    errno = 0;
+    const long primary_stream_val = std::strtol(argv[2], &end, 10);
+    if (end == argv[2] || *end != '\0' || errno == ERANGE ||
+        primary_stream_val < INT32_MIN || primary_stream_val > INT32_MAX) {
+        std::cerr << "Invalid primary_stream_id: " << argv[2] << std::endl;
+        return 1;
+    }
+    const std::int32_t primary_stream = static_cast<std::int32_t>(primary_stream_val);
+
+    end = nullptr;
+    errno = 0;
+    const long dropcopy_stream_val = std::strtol(argv[4], &end, 10);
+    if (end == argv[4] || *end != '\0' || errno == ERANGE ||
+        dropcopy_stream_val < INT32_MIN || dropcopy_stream_val > INT32_MAX) {
+        std::cerr << "Invalid dropcopy_stream_id: " << argv[4] << std::endl;
+        return 1;
+    }
+    const std::int32_t dropcopy_stream = static_cast<std::int32_t>(dropcopy_stream_val);
 
     ingest::Ring primary_ring;
     ingest::Ring dropcopy_ring;
@@ -63,6 +91,9 @@ int main(int argc, char** argv) {
     constexpr std::size_t order_capacity_hint = 1u << 16;
     core::OrderStateStore store(arena, order_capacity_hint);
 
+    core::ReconConfig recon_config = core::default_recon_config();
+    auto timer_wheel = std::make_unique<util::WheelTimer>(util::rdtsc());
+
     aeron::Context context;
     const char* aeron_dir = std::getenv("AERON_DIR");
     if (aeron_dir && aeron_dir[0] != '\0') {
@@ -71,7 +102,8 @@ int main(int argc, char** argv) {
     }
     auto client = aeron::Aeron::connect(context);
 
-    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters, divergence_ring, seq_gap_ring);
+    core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters,
+                           divergence_ring, seq_gap_ring, timer_wheel.get(), recon_config);
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
                                         core::Source::Primary, client, stop_flag);
@@ -119,6 +151,23 @@ int main(int argc, char** argv) {
                   static_cast<unsigned long long>(counters.dropcopy_events),
                   static_cast<unsigned long long>(counters.divergence_total),
                   static_cast<unsigned long long>(counters.divergence_ring_drops));
+    LOG_SLOW_INFO("Reconciler two-stage: observed=%llu confirmed=%llu false_pos_avoided=%llu "
+                  "matched=%llu deduped=%llu stale_timers=%llu gap_suppressions=%llu",
+                  static_cast<unsigned long long>(counters.mismatch_observed),
+                  static_cast<unsigned long long>(counters.mismatch_confirmed),
+                  static_cast<unsigned long long>(counters.false_positive_avoided),
+                  static_cast<unsigned long long>(counters.orders_matched),
+                  static_cast<unsigned long long>(counters.divergence_deduped),
+                  static_cast<unsigned long long>(counters.stale_timers_skipped),
+                  static_cast<unsigned long long>(counters.gap_suppressions));
+
+    const auto& wstats = timer_wheel->stats();
+    LOG_SLOW_INFO("TimerWheel scheduled=%llu expired=%llu rescheduled=%llu overflow=%llu pending=%zu",
+                  static_cast<unsigned long long>(wstats.scheduled),
+                  static_cast<unsigned long long>(wstats.expired),
+                  static_cast<unsigned long long>(wstats.rescheduled),
+                  static_cast<unsigned long long>(wstats.overflow_dropped),
+                  timer_wheel->total_pending());
 
     util::shutdown_hot_logger();
 

@@ -64,6 +64,9 @@ protected:
         case OrdStatus::Canceled:
             ev.exec_type = ExecType::Cancel;
             break;
+        case OrdStatus::Replaced:
+            ev.exec_type = ExecType::Replace;
+            break;
         case OrdStatus::Rejected:
             ev.exec_type = ExecType::Rejected;
             break;
