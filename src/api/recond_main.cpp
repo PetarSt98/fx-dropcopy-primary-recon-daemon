@@ -47,8 +47,8 @@ int main(int argc, char** argv) {
     }
 
     util::TscCalibration::instance().calibrate_blocking();
-    LOG_SLOW_INFO("TSC calibrated: freq=%lu Hz calibrated=%d",
-                  static_cast<unsigned long>(util::TscCalibration::instance().tsc_freq_hz()),
+    LOG_SLOW_INFO("TSC calibrated: freq=%llu Hz calibrated=%d",
+                  static_cast<unsigned long long>(util::TscCalibration::instance().tsc_freq_hz()),
                   static_cast<int>(util::TscCalibration::instance().is_calibrated()));
 
     const std::string primary_channel = argv[1];
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
     core::OrderStateStore store(arena, order_capacity_hint);
 
     core::ReconConfig recon_config = core::default_recon_config();
-    util::WheelTimer timer_wheel{util::rdtsc()};
+    auto timer_wheel = std::make_unique<util::WheelTimer>(util::rdtsc());
 
     aeron::Context context;
     const char* aeron_dir = std::getenv("AERON_DIR");
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     auto client = aeron::Aeron::connect(context);
 
     core::Reconciler recon(stop_flag, primary_ring, dropcopy_ring, store, counters,
-                           divergence_ring, seq_gap_ring, &timer_wheel, recon_config);
+                           divergence_ring, seq_gap_ring, timer_wheel.get(), recon_config);
 
     ingest::AeronSubscriber primary_sub(primary_channel, primary_stream, primary_ring, primary_stats,
                                         core::Source::Primary, client, stop_flag);
@@ -161,13 +161,13 @@ int main(int argc, char** argv) {
                   static_cast<unsigned long long>(counters.stale_timers_skipped),
                   static_cast<unsigned long long>(counters.gap_suppressions));
 
-    const auto& wstats = timer_wheel.stats();
+    const auto& wstats = timer_wheel->stats();
     LOG_SLOW_INFO("TimerWheel scheduled=%llu expired=%llu rescheduled=%llu overflow=%llu pending=%zu",
                   static_cast<unsigned long long>(wstats.scheduled),
                   static_cast<unsigned long long>(wstats.expired),
                   static_cast<unsigned long long>(wstats.rescheduled),
                   static_cast<unsigned long long>(wstats.overflow_dropped),
-                  timer_wheel.total_pending());
+                  timer_wheel->total_pending());
 
     util::shutdown_hot_logger();
 

@@ -189,8 +189,10 @@ private:
     // Pre-compute ceil(2^64 / d) for fast approximate division via mulhi64.
     // Using ceiling ensures tsc_to_tick never undercounts (at most overcounts
     // by 1 tick), which is safe -- exact deadline_tsc comparison handles precision.
+    // Returns 0 for d <= 1 to signal fallback to plain division (avoids UINT64_MAX
+    // wrapping which gives tsc-1 instead of tsc for d==1).
     static std::uint64_t compute_tick_reciprocal(std::uint64_t d) noexcept {
-        if (d <= 1) return ~std::uint64_t{0};
+        if (d <= 1) return 0;
 #if defined(__SIZEOF_INT128__)
         const __uint128_t num = static_cast<__uint128_t>(1) << 64;
         return static_cast<std::uint64_t>((num + d - 1) / d);
