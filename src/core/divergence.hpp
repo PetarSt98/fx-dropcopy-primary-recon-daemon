@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 
@@ -52,6 +53,8 @@ inline bool classify_divergence(const OrderState& state,
                                 std::int64_t qty_tolerance = 0,
                                 std::int64_t px_tolerance = 0,
                                 std::uint64_t timing_slack = 0) noexcept {
+    assert(qty_tolerance >= 0 && "qty_tolerance must be non-negative");
+    assert(px_tolerance >= 0 && "px_tolerance must be non-negative");
     using OS = OrdStatus;
 
     if (!state.seen_dropcopy) {
