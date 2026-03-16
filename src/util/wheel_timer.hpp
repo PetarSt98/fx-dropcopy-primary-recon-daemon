@@ -94,7 +94,12 @@ public:
 
         const std::size_t bucket_idx = (current_tick_ + delta_ticks) & (NUM_BUCKETS - 1);
 
-        if (!buckets_[bucket_idx].try_emplace_back(key, deadline_tsc, generation)) {
+        Entry entry{};
+        entry.key = key;
+        entry.deadline_tsc = deadline_tsc;
+        entry.generation = generation;
+
+        if (!buckets_[bucket_idx].try_emplace_back(entry)) {
             ++stats_.overflow_dropped;
             return false;
         }
