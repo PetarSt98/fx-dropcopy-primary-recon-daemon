@@ -41,10 +41,10 @@ public:
     void recycle(OrderKey key) noexcept;
     void reset_epoch() noexcept;
 
-    std::size_t bucket_count() const noexcept { return bucket_count_; }
-    std::size_t size() const noexcept { return size_; }
-    std::size_t overflow_count() const noexcept { return overflow_count_; }
-    std::size_t recycled_count() const noexcept { return recycled_count_; }
+    [[nodiscard]] std::size_t bucket_count() const noexcept { return bucket_count_; }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] std::size_t overflow_count() const noexcept { return overflow_count_; }
+    [[nodiscard]] std::size_t recycled_count() const noexcept { return recycled_count_; }
 
 private:
     // Sentinel values for key slots. These reserve the top two OrderKey values.

@@ -31,22 +31,6 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
                        OrderStateStore& store,
                        ReconCounters& counters,
                        DivergenceRing& divergence_ring,
-                       SequenceGapRing& seq_gap_ring) noexcept
-    : stop_flag_(stop_flag),
-      primary_(primary),
-      dropcopy_(dropcopy),
-      store_(store),
-      counters_(counters),
-      divergence_ring_(divergence_ring),
-      seq_gap_ring_(seq_gap_ring) {}
-
-// New constructor with timer wheel and config (FX-7053)
-Reconciler::Reconciler(std::atomic<bool>& stop_flag,
-                       ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
-                       ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
-                       OrderStateStore& store,
-                       ReconCounters& counters,
-                       DivergenceRing& divergence_ring,
                        SequenceGapRing& seq_gap_ring,
                        util::WheelTimer* timer_wheel,
                        const ReconConfig& config) noexcept
@@ -58,7 +42,11 @@ Reconciler::Reconciler(std::atomic<bool>& stop_flag,
       divergence_ring_(divergence_ring),
       seq_gap_ring_(seq_gap_ring),
       timer_wheel_(timer_wheel),
-      config_(config) {}
+      config_(config),
+      grace_period_tsc_(util::ns_to_tsc(config.grace_period_ns)),
+      gap_timeout_tsc_(util::ns_to_tsc(config.gap_timeout_ns)),
+      gap_recheck_period_tsc_(util::ns_to_tsc(config.gap_recheck_period_ns)),
+      dedup_window_tsc_(util::ns_to_tsc(config.divergence_dedup_window_ns)) {}
 
 void Reconciler::increment_divergence_counter(DivergenceType type) noexcept {
     switch (type) {
@@ -191,16 +179,18 @@ void Reconciler::process_event(const ExecEvent& ev) noexcept {
         // Handle state transition based on mismatch
         handle_recon_state_transition(*st, new_mismatch, now_tsc);
     } else {
-        // Legacy behavior: immediate emission (backward compatibility / testing)
+        // Legacy path: immediate emission via classify_divergence which has
+        // its own seen_dropcopy guard, MissingFill classification, and does
+        // not compare exec IDs -- preserving backward-compatible semantics.
         Divergence div{};
-        if (classify_divergence(*st, div, qty_tolerance_, px_tolerance_, timing_slack_)) {
+        if (classify_divergence(*st, div, config_.qty_tolerance,
+                                config_.px_tolerance, config_.timing_slack_ns)) {
             if (!divergence_ring_.try_push(div)) {
                 ++counters_.divergence_ring_drops;
                 LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
                             "divergence_ring_drop type=%u key=%llu",
                             static_cast<unsigned>(div.type),
                             static_cast<unsigned long long>(div.key));
-                // Fall through to recycling check below
             } else {
                 ++counters_.divergence_total;
                 increment_divergence_counter(div.type);
@@ -238,7 +228,6 @@ void Reconciler::run() {
     std::uint64_t last_gap_check_tsc = util::rdtsc();
     const std::uint64_t gap_check_interval_tsc = util::ns_to_tsc(GAP_CHECK_INTERVAL_NS);
 
-
     while (!stop_flag_.load(std::memory_order_acquire)) {
         bool consumed = false;
 
@@ -259,8 +248,8 @@ void Reconciler::run() {
         // (using stale last_poll_tsc_ could cause timers to be skipped)
         const std::uint64_t now = util::rdtsc();
         if (timer_wheel_) {
-            timer_wheel_->poll_expired(now, [this](OrderKey key, std::uint32_t gen) {
-                on_grace_deadline_expired(key, gen);
+            timer_wheel_->poll_expired(now, [this, now](OrderKey key, std::uint32_t gen) {
+                on_grace_deadline_expired(key, gen, now);
             });
         }
         
@@ -311,32 +300,6 @@ bool Reconciler::is_gap_suppressed(const OrderState& os) noexcept {
         return true;
     }
 
-    // Inline gap timeout check (from master branch's FX-7054 Part 1):
-    // Close gaps that have exceeded gap_close_timeout_ns during reconciliation checks.
-    // This provides faster gap closure than the periodic check_gap_timeouts() in run().
-    // IMPORTANT: Use util::rdtsc() to get current time. last_poll_tsc_ is only updated
-    // on events and would stay stale if no events arrive, causing infinite gap suppression.
-    // const std::uint64_t now = util::rdtsc();
-    // const std::uint64_t timeout_tsc = util::ns_to_tsc(config_.gap_close_timeout_ns);
-
-    // if (primary_seq_tracker_.gap_open) {
-    //     if (primary_seq_tracker_.gap_detected_tsc > 0 &&
-    //         now > primary_seq_tracker_.gap_detected_tsc &&
-    //         (now - primary_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-    //         close_gap(primary_seq_tracker_);
-    //         ++counters_.gaps_closed_by_timeout;
-    //     }
-    // }
-
-    // if (dropcopy_seq_tracker_.gap_open) {
-    //     if (dropcopy_seq_tracker_.gap_detected_tsc > 0 &&
-    //         now > dropcopy_seq_tracker_.gap_detected_tsc &&
-    //         (now - dropcopy_seq_tracker_.gap_detected_tsc) >= timeout_tsc) {
-    //         close_gap(dropcopy_seq_tracker_);
-    //         ++counters_.gaps_closed_by_timeout;
-    //     }
-    // }
-
     return false;
 }
 
@@ -345,8 +308,7 @@ void Reconciler::enter_grace_period(OrderState& os, MismatchMask mismatch,
     os.recon_state = ReconState::InGrace;
     os.current_mismatch = mismatch;
     os.mismatch_first_seen_tsc = now_tsc;
-    // Convert nanoseconds config to TSC cycles before adding to TSC timestamp
-    os.recon_deadline_tsc = now_tsc + util::ns_to_tsc(config_.grace_period_ns);
+    os.recon_deadline_tsc = now_tsc + grace_period_tsc_;
 
     // Schedule timer (requires non-null timer_wheel_)
     if (timer_wheel_) {
@@ -385,10 +347,11 @@ void Reconciler::exit_grace_period(OrderState& os, std::uint64_t /*now_tsc*/) no
     ++counters_.orders_matched;
 }
 
-void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen) noexcept {
+void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen,
+                                           std::uint64_t now_tsc) noexcept {
     OrderState* os = store_.find(key);
     if (!os) {
-        return;  // Order was recycled
+        return;
     }
 
     if (!is_timer_valid(*os, scheduled_gen)) {
@@ -396,23 +359,13 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
         return;
     }
 
-    // Additional safety check: only process if order is in a state expecting timer callback.
-    // This protects against edge cases where state changed without timer cancellation.
     if (os->recon_state != ReconState::InGrace && os->recon_state != ReconState::SuppressedByGap) {
         ++counters_.stale_timers_skipped;
         return;
     }
 
-    // Get current time for all checks
-    const std::uint64_t now = util::rdtsc();
-    
-    // CRITICAL: Check gap timeouts before suppression check
-    // Without this, gaps can remain open for up to 1 second longer than gap_timeout_ns
-    // (since check_gap_timeouts in run() only executes once per second).
-    // This ensures timely gap closure when making reconciliation decisions.
-    check_gap_timeouts(now);
+    check_gap_timeouts(now_tsc);
 
-    // Re-check mismatch at expiration time (use same tolerances as main reconciliation path)
     const MismatchMask mismatch = compute_mismatch(*os, config_.qty_tolerance, config_.px_tolerance);
 
     if (mismatch.none()) {
@@ -422,33 +375,31 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
     } else if (is_gap_suppressed(*os)) {
         os->recon_state = ReconState::SuppressedByGap;
 
-        const std::uint64_t suppression_duration = now - os->mismatch_first_seen_tsc;
-        const std::uint64_t max_suppression_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
+        const std::uint64_t suppression_duration = now_tsc - os->mismatch_first_seen_tsc;
 
-        if (suppression_duration < max_suppression_tsc && timer_wheel_) {
+        if (suppression_duration < gap_timeout_tsc_ && timer_wheel_) {
             const bool rescheduled = refresh_recon_deadline(
                 *timer_wheel_, *os,
-                now + util::ns_to_tsc(config_.gap_recheck_period_ns));
+                now_tsc + gap_recheck_period_tsc_);
             if (!rescheduled) {
                 ++counters_.timer_overflow;
                 os->recon_state = ReconState::DivergedConfirmed;
-                emit_confirmed_divergence(*os, mismatch, now);
+                emit_confirmed_divergence(*os, mismatch, now_tsc);
                 ++counters_.mismatch_confirmed;
             } else {
                 ++counters_.gap_suppressions;
             }
         } else {
             os->recon_state = ReconState::DivergedConfirmed;
-            emit_confirmed_divergence(*os, mismatch, now);
+            emit_confirmed_divergence(*os, mismatch, now_tsc);
             ++counters_.mismatch_confirmed;
         }
     } else {
         os->recon_state = ReconState::DivergedConfirmed;
-        emit_confirmed_divergence(*os, mismatch, now);
+        emit_confirmed_divergence(*os, mismatch, now_tsc);
         ++counters_.mismatch_confirmed;
     }
 
-    // After handling expiry, check if order can now be recycled
     if (is_recyclable(*os)) {
         store_.recycle(os->key);
         ++counters_.orders_recycled;
@@ -457,8 +408,7 @@ void Reconciler::on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled
 
 void Reconciler::emit_confirmed_divergence(OrderState& os, MismatchMask mismatch,
                                            std::uint64_t now_tsc) noexcept {
-    // Check deduplication using free function from order_state.hpp
-    if (!should_emit_divergence(os, mismatch, now_tsc, config_.divergence_dedup_window_ns)) {
+    if (!should_emit_divergence(os, mismatch, now_tsc, dedup_window_tsc_)) {
         ++counters_.divergence_deduped;
         return;
     }
@@ -654,14 +604,9 @@ void Reconciler::close_session_gap(Source source) noexcept {
 }
 
 void Reconciler::check_gap_timeouts(std::uint64_t now_tsc) noexcept {
-    const std::uint64_t gap_timeout_tsc = util::ns_to_tsc(config_.gap_timeout_ns);
-    
-    // Check Primary gap timeout
-    // Note: gap_opened_tsc is always set when gap_open becomes true (see track_sequence),
-    // but we check > 0 as a defensive measure against uninitialized state
     if (primary_seq_tracker_.gap_open &&
         primary_seq_tracker_.gap_opened_tsc != 0 &&
-        (now_tsc - primary_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
+        (now_tsc - primary_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc_) {
         
         LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
                     "gap_timeout src=Primary epoch=%u missing=[%llu,%llu]",
@@ -673,10 +618,9 @@ void Reconciler::check_gap_timeouts(std::uint64_t now_tsc) noexcept {
         ++counters_.gap_timeouts;
     }
     
-    // Check DropCopy gap timeout
     if (dropcopy_seq_tracker_.gap_open &&
         dropcopy_seq_tracker_.gap_opened_tsc != 0 &&
-        (now_tsc - dropcopy_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc) {
+        (now_tsc - dropcopy_seq_tracker_.gap_opened_tsc) > gap_timeout_tsc_) {
         
         LOG_HOT_LVL(::util::LogLevel::Warn, "RECON",
                     "gap_timeout src=DropCopy epoch=%u missing=[%llu,%llu]",

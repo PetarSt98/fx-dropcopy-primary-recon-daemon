@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include "util/perf_macros.hpp"
@@ -79,6 +80,8 @@ explicit Arena(std::size_t capacity_bytes = default_capacity_bytes)
     [[nodiscard]] void* allocate(std::size_t size, std::size_t alignment) noexcept {
         PERF_SCOPE(::util::PerfCounterId::ArenaAllocate);
         
+        assert(alignment > 0 && (alignment & (alignment - 1)) == 0
+               && "alignment must be a non-zero power of 2");
         if (alignment == 0 || !buffer_) {
             return nullptr;
         }

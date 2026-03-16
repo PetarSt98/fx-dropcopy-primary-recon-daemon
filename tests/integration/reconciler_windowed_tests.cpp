@@ -14,6 +14,7 @@
 #include "core/reconciler.hpp"
 #include "ingest/spsc_ring.hpp"
 #include "util/arena.hpp"
+#include "util/rdtsc.hpp"
 #include "util/tsc_calibration.hpp"
 #include "util/wheel_timer.hpp"
 
@@ -285,8 +286,9 @@ TEST_F(ReconcilerWindowedTest, MismatchPersists_ConfirmedDivergence) {
     EXPECT_EQ(os->recon_state, ReconState::InGrace);
 
     // Advance time past grace (t=200ms, no correction arrives)
-    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
+    const auto poll_tsc_200 = ns_to_tsc(200'000'000);
+    timer_wheel->poll_expired(poll_tsc_200, [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g, poll_tsc_200);
     });
 
     // Divergence confirmed
@@ -335,8 +337,9 @@ TEST_F(ReconcilerWindowedTest, PrimaryNeverArrives_PhantomOrder) {
     EXPECT_EQ(counters_.mismatch_observed, 1u);
 
     // Advance time past grace period - primary never arrives
-    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
+    const auto poll_tsc_200 = ns_to_tsc(200'000'000);
+    timer_wheel->poll_expired(poll_tsc_200, [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g, poll_tsc_200);
     });
 
     // Divergence should be emitted (PhantomOrder - dropcopy seen, primary not)
@@ -385,8 +388,9 @@ TEST_F(ReconcilerWindowedTest, DropcopyNeverArrives_MissingDropCopy) {
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
 
     // Advance time past grace period - dropcopy never arrives
-    timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
+    const auto poll_tsc_200 = ns_to_tsc(200'000'000);
+    timer_wheel->poll_expired(poll_tsc_200, [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g, poll_tsc_200);
     });
 
     // Divergence should be emitted (MissingDropCopy - primary seen, dropcopy not)
@@ -512,7 +516,7 @@ TEST_F(ReconcilerWindowedTest, StaleTimer_Skipped) {
     EXPECT_GT(os->timer_generation, old_gen);
 
     // Now simulate timer firing with old generation
-    reconciler.on_grace_deadline_expired(key, old_gen);
+    reconciler.on_grace_deadline_expired(key, old_gen, util::rdtsc());
 
     // Timer should be skipped (stale generation)
     EXPECT_TRUE(drain_divergences(*divergence_ring).empty());
@@ -587,8 +591,9 @@ TEST_F(ReconcilerWindowedTest, ReplayDeterminism) {
         }
 
         // Fire timers at deterministic time
-        timer_wheel->poll_expired(ns_to_tsc(200'000'000), [&](OrderKey k, std::uint32_t g) {
-            reconciler.on_grace_deadline_expired(k, g);
+        const auto poll_tsc_200 = ns_to_tsc(200'000'000);
+        timer_wheel->poll_expired(poll_tsc_200, [&](OrderKey k, std::uint32_t g) {
+            reconciler.on_grace_deadline_expired(k, g, poll_tsc_200);
         });
 
         std::vector<Divergence> result;
@@ -743,8 +748,9 @@ TEST_F(ReconcilerWindowedTest, DivergedConfirmed_ResolvesToMatched) {
     ASSERT_NE(os, nullptr);
 
     // Confirm divergence by expiring timer
-    timer_wheel->poll_expired(ns_to_tsc(50'000'000), [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
+    const auto poll_tsc_50 = ns_to_tsc(50'000'000);
+    timer_wheel->poll_expired(poll_tsc_50, [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g, poll_tsc_50);
     });
 
     EXPECT_EQ(os->recon_state, ReconState::DivergedConfirmed);
@@ -836,8 +842,9 @@ TEST_F(ReconcilerWindowedTest, TimerWheelStats_Tracked) {
     EXPECT_GE(stats.scheduled, 1u);
 
     // Fire timer
-    timer_wheel->poll_expired(ns_to_tsc(50'000'000), [&](OrderKey k, std::uint32_t g) {
-        reconciler.on_grace_deadline_expired(k, g);
+    const auto poll_tsc_50 = ns_to_tsc(50'000'000);
+    timer_wheel->poll_expired(poll_tsc_50, [&](OrderKey k, std::uint32_t g) {
+        reconciler.on_grace_deadline_expired(k, g, poll_tsc_50);
     });
 
     // Check timer expired
@@ -894,7 +901,7 @@ TEST_F(ReconcilerWindowedTest, OneSideFirst_OtherArrivesWithinGrace_NoDivergence
 TEST_F(ReconcilerWindowedTest, GapClosesOnOutOfOrderMessage) {
     ReconConfig config;
     config.grace_period_ns = 500'000'000;  // 500ms
-    config.gap_close_timeout_ns = 1'000'000'000;  // 1s (long, so timeout doesn't trigger)
+    config.gap_timeout_ns = 1'000'000'000;  // 1s (long, so timeout doesn't trigger)
     config.enable_windowed_recon = true;
     config.enable_gap_suppression = true;
 

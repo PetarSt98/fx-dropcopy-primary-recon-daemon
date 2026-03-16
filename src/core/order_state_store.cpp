@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 #include "util/perf_macros.hpp"
 
 namespace core {
@@ -57,27 +58,20 @@ OrderStateStore::OrderStateStore(util::Arena& arena, std::size_t capacity_hint)
 // ---------------------------------------------------------------------------
 
 OrderState* OrderStateStore::alloc_state(OrderKey key) noexcept {
-    OrderState* st = nullptr;
+    void* mem = nullptr;
 
     if (free_head_) {
-        // Reuse recycled slot -- zero allocation.
-        st = free_head_;
+        mem = static_cast<void*>(free_head_);
         OrderState* next{};
-        std::memcpy(&next, st, sizeof(next));
+        std::memcpy(&next, mem, sizeof(next));
         free_head_ = next;
     } else {
-        // First-time allocation from arena.
-        st = create_order_state(arena_, key);
-        if (!st) return nullptr;
-        // create_order_state already initialises key; we still memset below
-        // for a uniform code path.
+        mem = arena_.allocate(sizeof(OrderState), alignof(OrderState));
+        if (!mem) return nullptr;
     }
 
-    std::memset(static_cast<void*>(st), 0, sizeof(OrderState));
+    auto* st = ::new (mem) OrderState{};
     st->key = key;
-    st->internal_status = OrdStatus::Unknown;
-    st->dropcopy_status = OrdStatus::Unknown;
-    st->recon_state = ReconState::Unknown;
     return st;
 }
 

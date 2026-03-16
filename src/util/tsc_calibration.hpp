@@ -114,7 +114,7 @@ public:
         }
         
         set_tsc_freq_hz(measured_freq);
-        calibrated_ = true;
+        calibrated_.store(true, std::memory_order_release);
         
         // Log measured frequency for monitoring (HFT systems typically log to stderr)
         std::fprintf(stderr, "[TscCalibration] Measured TSC frequency: %lu Hz (%.3f GHz)\n",
@@ -131,7 +131,7 @@ public:
     
     // Check if runtime calibration was performed
     [[nodiscard]] bool is_calibrated() const noexcept {
-        return calibrated_;
+        return calibrated_.load(std::memory_order_acquire);
     }
 
     // Convert TSC cycles to nanoseconds using Q32.32 fixed-point
@@ -144,15 +144,13 @@ public:
         __uint128_t product = static_cast<__uint128_t>(cycles) * npc;
         return static_cast<std::uint64_t>(product >> FRAC_BITS);
     #else
-        // Fallback for platforms without 128-bit integers
-        // Split into high/low parts to avoid overflow
+        // Fallback for platforms without 128-bit integers.
+        // Load npc ONCE to avoid torn reads from two separate atomic loads.
         const std::uint64_t cycles_hi = cycles >> 32;
         const std::uint64_t cycles_lo = cycles & 0xFFFFFFFFULL;
-        const std::uint64_t ns_hi = ns_per_cycle_q32_ >> 32;
-        const std::uint64_t ns_lo = ns_per_cycle_q32_ & 0xFFFFFFFFULL;
+        const std::uint64_t ns_hi = npc >> 32;
+        const std::uint64_t ns_lo = npc & 0xFFFFFFFFULL;
         
-        // Full product = (cycles_hi * 2^32 + cycles_lo) * (ns_hi * 2^32 + ns_lo)
-        // We need bits [95:32] of the 128-bit result
         const std::uint64_t lo_lo = cycles_lo * ns_lo;
         const std::uint64_t lo_hi = cycles_lo * ns_hi;
         const std::uint64_t hi_lo = cycles_hi * ns_lo;
@@ -160,22 +158,22 @@ public:
         
         const std::uint64_t mid = (lo_lo >> 32) + (lo_hi & 0xFFFFFFFFULL) + (hi_lo & 0xFFFFFFFFULL);
         return hi_hi + (lo_hi >> 32) + (hi_lo >> 32) + (mid >> 32);
-#endif
+    #endif
     }
 
     // Convert nanoseconds to TSC cycles using Q32.32 fixed-point
     // ns_to_cycles = ns * cycles_per_ns_q32 >> 32
     [[nodiscard]] std::uint64_t ns_to_cycles(std::uint64_t ns) const noexcept {
         const auto cpn = cycles_per_ns_q32_.load(std::memory_order_relaxed);
-#if defined(__SIZEOF_INT128__)
+    #if defined(__SIZEOF_INT128__)
         __uint128_t product = static_cast<__uint128_t>(ns) * cpn;
         return static_cast<std::uint64_t>(product >> FRAC_BITS);
-#else
-        // Fallback using same technique as cycles_to_ns
+    #else
+        // Load cpn ONCE above to avoid torn reads from two separate atomic loads.
         const std::uint64_t ns_hi = ns >> 32;
         const std::uint64_t ns_lo = ns & 0xFFFFFFFFULL;
-        const std::uint64_t cpn_hi = cycles_per_ns_q32_ >> 32;
-        const std::uint64_t cpn_lo = cycles_per_ns_q32_ & 0xFFFFFFFFULL;
+        const std::uint64_t cpn_hi = cpn >> 32;
+        const std::uint64_t cpn_lo = cpn & 0xFFFFFFFFULL;
         
         const std::uint64_t lo_lo = ns_lo * cpn_lo;
         const std::uint64_t lo_hi = ns_lo * cpn_hi;
@@ -184,7 +182,7 @@ public:
         
         const std::uint64_t mid = (lo_lo >> 32) + (lo_hi & 0xFFFFFFFFULL) + (hi_lo & 0xFFFFFFFFULL);
         return hi_hi + (lo_hi >> 32) + (hi_lo >> 32) + (mid >> 32);
-#endif
+    #endif
     }
 
     // Legacy accessor for backward compatibility
@@ -194,35 +192,33 @@ public:
 
     // Allow manual override of TSC frequency (for testing or known hardware)
     void set_tsc_freq_hz(std::uint64_t freq_hz) noexcept {
-        // Compute Q32.32 fixed-point conversion factors
-        // cycles_per_ns_q32 = (freq_hz << 32) / NS_PER_SEC
-        // ns_per_cycle_q32 = (NS_PER_SEC << 32) / freq_hz
-        
         if (freq_hz == 0) {
-            freq_hz = DEFAULT_TSC_FREQ_HZ;  // Prevent division by zero
+            freq_hz = DEFAULT_TSC_FREQ_HZ;
         }
         tsc_freq_hz_.store(freq_hz, std::memory_order_relaxed);
-        
-        
-#if defined(__SIZEOF_INT128__)
-          cycles_per_ns_q32_.store(static_cast<std::uint64_t>(
-            (static_cast<__uint128_t>(freq_hz) << FRAC_BITS) / NS_PER_SEC
-        ), std::memory_order_relaxed);
-        ns_per_cycle_q32_.store(static_cast<std::uint64_t>(
-            (static_cast<__uint128_t>(NS_PER_SEC) << FRAC_BITS) / freq_hz
-        ), std::memory_order_relaxed);
-#else 
-        // Fallback: use double for intermediate calculation, then convert
-        const double cycles_per_ns = static_cast<double>(freq_hz) / static_cast<double>(NS_PER_SEC);
-        const double ns_per_cycle = static_cast<double>(NS_PER_SEC) / static_cast<double>(freq_hz);
-        cycles_per_ns_q32_ = static_cast<std::uint64_t>(cycles_per_ns * static_cast<double>(FRAC_SCALE));
-        ns_per_cycle_q32_ = static_cast<std::uint64_t>(ns_per_cycle * static_cast<double>(FRAC_SCALE));
-#endif
-        
-        // Safety floor for cycles_per_ns (at least 1 in integer part)
-        if (cycles_per_ns_q32_ < FRAC_SCALE) {
-            cycles_per_ns_q32_ = FRAC_SCALE;
+
+        // Compute Q32.32 fixed-point conversion factors into locals,
+        // then store once. Avoids implicit atomic load/store in the
+        // #else fallback and the TOCTOU in the safety-floor check.
+        std::uint64_t cpn_val;
+        std::uint64_t npc_val;
+    #if defined(__SIZEOF_INT128__)
+        cpn_val = static_cast<std::uint64_t>(
+            (static_cast<__uint128_t>(freq_hz) << FRAC_BITS) / NS_PER_SEC);
+        npc_val = static_cast<std::uint64_t>(
+            (static_cast<__uint128_t>(NS_PER_SEC) << FRAC_BITS) / freq_hz);
+    #else
+        const double cpn_d = static_cast<double>(freq_hz) / static_cast<double>(NS_PER_SEC);
+        const double npc_d = static_cast<double>(NS_PER_SEC) / static_cast<double>(freq_hz);
+        cpn_val = static_cast<std::uint64_t>(cpn_d * static_cast<double>(FRAC_SCALE));
+        npc_val = static_cast<std::uint64_t>(npc_d * static_cast<double>(FRAC_SCALE));
+    #endif
+
+        if (cpn_val < FRAC_SCALE) {
+            cpn_val = FRAC_SCALE;
         }
+        cycles_per_ns_q32_.store(cpn_val, std::memory_order_relaxed);
+        ns_per_cycle_q32_.store(npc_val, std::memory_order_relaxed);
     }
 
     // Explicit calibration method for startup (NOT in hot path!)
@@ -261,7 +257,7 @@ private:
     std::atomic<std::uint64_t> tsc_freq_hz_;           // TSC frequency in Hz
     std::atomic<std::uint64_t> cycles_per_ns_q32_;     // Q32.32 fixed-point: cycles per nanosecond
     std::atomic<std::uint64_t> ns_per_cycle_q32_;      // Q32.32 fixed-point: nanoseconds per cycle
-    bool calibrated_;                      // True if runtime calibration succeeded
+    std::atomic<bool> calibrated_;         // True if runtime calibration succeeded
 };
 
 // Convenience free functions for common operations

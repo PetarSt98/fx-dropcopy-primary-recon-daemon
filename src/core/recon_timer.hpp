@@ -117,7 +117,8 @@ inline void cancel_recon_deadline(OrderState& os) noexcept {
 //
 // SCENARIO 3: Handling timer expiry
 //
-//     void Reconciler::on_deadline_expired(OrderKey key, uint32_t scheduled_gen) {
+//     void Reconciler::on_deadline_expired(OrderKey key, uint32_t scheduled_gen,
+//                                          uint64_t now_tsc) {
 //         OrderState* os = store_.find(key);
 //         if (!os) return;  // Order was recycled
 //
@@ -135,10 +136,10 @@ inline void cancel_recon_deadline(OrderState& os) noexcept {
 //             os->recon_state = ReconState::Matched;
 //             ++counters_.false_positive_avoided;
 //         }
-//         else if (os->has_gap) {
+//         else if (is_gap_suppressed(*os)) {
 //             // Sequence gap open - suppress divergence, reschedule
 //             os->recon_state = ReconState::SuppressedByGap;
-//             refresh_recon_deadline(timer_wheel_, *os, now_tsc() + gap_recheck_ns_);
+//             refresh_recon_deadline(timer_wheel_, *os, now_tsc + gap_recheck_period_tsc_);
 //         }
 //         else {
 //             // Confirmed divergence - emit alert

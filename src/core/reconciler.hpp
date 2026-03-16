@@ -57,11 +57,6 @@ struct ReconCounters {
     std::uint64_t orders_recycled{0};          // Terminal orders recycled from hash table
 };
 
-// Default deduplication window: don't re-emit identical divergence within this period.
-// This prevents flooding the divergence queue with repeated identical events.
-// Note: This may become configurable in future (FX-7200).
-static constexpr std::uint64_t DEFAULT_DIVERGENCE_DEDUP_WINDOW_NS = 1'000'000'000;  // 1 second
-
 // Classify divergence type based on order state and mismatch mask (FX-7053)
 [[nodiscard]] inline DivergenceType classify_divergence_type(
     const OrderState& os,
@@ -91,16 +86,6 @@ static constexpr std::uint64_t DEFAULT_DIVERGENCE_DEDUP_WINDOW_NS = 1'000'000'00
 
 class Reconciler {
 public:
-    // Existing constructor (backward compatibility)
-    Reconciler(std::atomic<bool>& stop_flag,
-               ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
-               ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
-               OrderStateStore& store,
-               ReconCounters& counters,
-               DivergenceRing& divergence_ring,
-               SequenceGapRing& seq_gap_ring) noexcept;
-
-    // New constructor with timer wheel and config (FX-7053)
     Reconciler(std::atomic<bool>& stop_flag,
                ingest::SpscRing<core::ExecEvent, 1u << 16>& primary,
                ingest::SpscRing<core::ExecEvent, 1u << 16>& dropcopy,
@@ -108,7 +93,7 @@ public:
                ReconCounters& counters,
                DivergenceRing& divergence_ring,
                SequenceGapRing& seq_gap_ring,
-               util::WheelTimer* timer_wheel,  // nullptr = disable windowed recon
+               util::WheelTimer* timer_wheel = nullptr,
                const ReconConfig& config = default_recon_config()) noexcept;
 
     void run();
@@ -131,8 +116,9 @@ public:
     // Exit grace period (mismatch resolved before deadline)
     void exit_grace_period(OrderState& os, std::uint64_t now_tsc) noexcept;
 
-    // Handle timer expiration callback from wheel
-    void on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen) noexcept;
+    // Handle timer expiration callback from wheel (now_tsc injected for testability)
+    void on_grace_deadline_expired(OrderKey key, std::uint32_t scheduled_gen,
+                                   std::uint64_t now_tsc) noexcept;
 
     // Emit confirmed divergence (with deduplication check)
     // Uses the inline function should_emit_divergence() from order_state.hpp
@@ -144,11 +130,7 @@ public:
     void handle_recon_state_transition(OrderState& os, MismatchMask new_mismatch,
                                        std::uint64_t now_tsc) noexcept;
 
-    // Accessor for last poll TSC (used by tests)
     [[nodiscard]] std::uint64_t last_poll_tsc() const noexcept { return last_poll_tsc_; }
-
-        // Setter for last poll TSC (used by tests with simulated time)
-    // Must be called before poll_expired to prevent infinite reschedule loops
     void set_last_poll_tsc_for_test(std::uint64_t tsc) noexcept { last_poll_tsc_ = tsc; }
 
     // FX-7054: Administrative gap closure (for testing and manual intervention)
@@ -158,12 +140,7 @@ private:
     void process_event(const ExecEvent& ev) noexcept;
     void increment_divergence_counter(DivergenceType type) noexcept;
     
-    // FX-7054: Gap management
     void check_gap_timeouts(std::uint64_t now_tsc) noexcept;
-
-    static constexpr std::int64_t qty_tolerance_ = 0;
-    static constexpr std::int64_t px_tolerance_ = 0;
-    static constexpr std::uint64_t timing_slack_ = 0;
 
     std::atomic<bool>& stop_flag_;
     ingest::SpscRing<core::ExecEvent, 1u << 16>& primary_;
@@ -176,10 +153,15 @@ private:
     SequenceTracker primary_seq_tracker_{};
     SequenceTracker dropcopy_seq_tracker_{};
 
-    // ===== New members (FX-7053) =====
-    util::WheelTimer* timer_wheel_{nullptr};  // Optional, nullptr if windowed recon disabled
+    util::WheelTimer* timer_wheel_{nullptr};
     ReconConfig config_{};
-    std::uint64_t last_poll_tsc_{0};  // Last poll timestamp for deadline processing
+    std::uint64_t last_poll_tsc_{0};
+
+    // Pre-computed TSC conversions of immutable config values (avoid ns_to_tsc on hot path)
+    std::uint64_t grace_period_tsc_{0};
+    std::uint64_t gap_timeout_tsc_{0};
+    std::uint64_t gap_recheck_period_tsc_{0};
+    std::uint64_t dedup_window_tsc_{0};
 };
 
 } // namespace core

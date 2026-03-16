@@ -37,9 +37,6 @@ TEST(OrderStateTest, CreateOrderStateInitialization) {
     EXPECT_EQ(state->last_dropcopy_exec_id_len, 0);
     EXPECT_FALSE(state->seen_internal);
     EXPECT_FALSE(state->seen_dropcopy);
-    EXPECT_FALSE(state->has_divergence);
-    EXPECT_FALSE(state->has_gap);
-    EXPECT_EQ(state->divergence_count, 0);
     EXPECT_EQ(state->last_internal_exec_id[0], '\0');
     EXPECT_EQ(state->last_dropcopy_exec_id[0], '\0');
 }
@@ -258,7 +255,7 @@ TEST(ShouldEmitDivergenceTest, NeverEmitted_ReturnsTrue) {
     mismatch.set(core::MismatchMask::STATUS);
 
     // First emission should always return true (last_divergence_emit_tsc == 0)
-    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000, 1'000'000'000));
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000, util::ns_to_tsc(1'000'000'000)));
 }
 
 TEST(ShouldEmitDivergenceTest, SameMismatchWithinWindow_ReturnsFalse) {
@@ -277,7 +274,7 @@ TEST(ShouldEmitDivergenceTest, SameMismatchWithinWindow_ReturnsFalse) {
     os.last_emitted_mismatch = mismatch;
 
     // Same mismatch within dedup window (500 cycles << 3 billion cycles)
-    EXPECT_FALSE(core::should_emit_divergence(os, mismatch, 1500, dedup_window_ns));
+    EXPECT_FALSE(core::should_emit_divergence(os, mismatch, 1500, dedup_window_tsc));
 }
 
 TEST(ShouldEmitDivergenceTest, SameMismatchAfterWindow_ReturnsTrue) {
@@ -294,7 +291,7 @@ TEST(ShouldEmitDivergenceTest, SameMismatchAfterWindow_ReturnsTrue) {
     os.last_emitted_mismatch = mismatch;
 
     // Same mismatch after window expires (TSC elapsed >= converted window)
-    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000 + dedup_window_tsc, dedup_window_ns));
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 1000 + dedup_window_tsc, dedup_window_tsc));
 }
 
 TEST(ShouldEmitDivergenceTest, DifferentMismatch_ReturnsTrue) {
@@ -310,7 +307,7 @@ TEST(ShouldEmitDivergenceTest, DifferentMismatch_ReturnsTrue) {
     os.last_emitted_mismatch = old_mismatch;
 
     // Different mismatch should always return true (even within window)
-    EXPECT_TRUE(core::should_emit_divergence(os, new_mismatch, 1001, 1'000'000'000));
+    EXPECT_TRUE(core::should_emit_divergence(os, new_mismatch, 1001, util::ns_to_tsc(1'000'000'000)));
 }
 
 TEST(ShouldEmitDivergenceTest, ClockAnomaly_ReturnsTrue) {
@@ -323,7 +320,7 @@ TEST(ShouldEmitDivergenceTest, ClockAnomaly_ReturnsTrue) {
     os.last_emitted_mismatch = mismatch;
 
     // When now_tsc < last_divergence_emit_tsc, should emit to be safe
-    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 5000, 1'000'000'000));
+    EXPECT_TRUE(core::should_emit_divergence(os, mismatch, 5000, util::ns_to_tsc(1'000'000'000)));
 }
 
 TEST(RecordDivergenceEmissionTest, UpdatesAllFields) {

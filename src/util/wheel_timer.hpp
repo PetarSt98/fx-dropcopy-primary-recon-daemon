@@ -44,9 +44,9 @@ public:
     static_assert((NUM_BUCKETS & (NUM_BUCKETS - 1)) == 0, "NUM_BUCKETS must be power of 2");
 
     struct Entry {
-        core::OrderKey key{0};
-        std::uint32_t generation{0};
-        std::uint64_t deadline_tsc{0};
+        core::OrderKey key{0};           // 8 bytes, offset 0
+        std::uint64_t deadline_tsc{0};   // 8 bytes, offset 8  (adjacent to key for poll_expired)
+        std::uint32_t generation{0};     // 4 bytes, offset 16 (+4 trailing pad = 24 total)
     };
 
     static_assert(std::is_trivially_copyable_v<Entry>, "Entry must be trivially copyable");
@@ -94,7 +94,12 @@ public:
 
         const std::size_t bucket_idx = (current_tick_ + delta_ticks) & (NUM_BUCKETS - 1);
 
-        if (!buckets_[bucket_idx].try_emplace_back(key, generation, deadline_tsc)) {
+        Entry entry{};
+        entry.key = key;
+        entry.deadline_tsc = deadline_tsc;
+        entry.generation = generation;
+
+        if (!buckets_[bucket_idx].try_emplace_back(entry)) {
             ++stats_.overflow_dropped;
             return false;
         }
@@ -139,7 +144,7 @@ public:
                     if (delta >= NUM_BUCKETS) delta = NUM_BUCKETS - 1;
 
                     const std::size_t target = (current_tick_ + delta) & (NUM_BUCKETS - 1);
-                    if (buckets_[target].try_emplace_back(rkey, rgen, rdeadline)) {
+                    if (buckets_[target].try_emplace_back(rkey, rdeadline, rgen)) {
                         ++stats_.rescheduled;
                     } else {
                         ++stats_.overflow_dropped;
