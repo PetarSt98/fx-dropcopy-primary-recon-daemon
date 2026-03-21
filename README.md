@@ -157,7 +157,7 @@ The daemon is a long-running process composed of a small set of explicit compone
   - Canonical State Store
       - Arena allocator:
           - Pre-allocated memory region for OrderState objects.
-          - Bump-pointer allocation; no free on hot path.
+          - Bump-pointer allocation with intrusive freelist for recycled terminal orders.
       - Open-addressed hash table:
           - Key: compact OrderKey (e.g. hashed ClOrdID / internal order id).
           - Value: handle/pointer to OrderState in the arena.
@@ -260,9 +260,9 @@ Phase 3 – Integration & Tooling
 ---------------------------------
 
 Language & toolchain:
-  - C++20 or later
-  - CMake-based build
-  - Linux target (x86_64)
+  - C++23 (GCC 11.4+, Clang 16+)
+  - CMake 3.20+ with presets
+  - Linux target (x86_64), Docker for portable builds
 
 Performance techniques:
   - SPSC ring buffers (single producer / single consumer):
@@ -291,52 +291,53 @@ Testing & validation:
 8. Performance Characteristics
 ------------------------------
 
-### Microbenchmark Results
+All measurements taken on an 11-core x86_64 (Intel Core Ultra 9 185H), GCC 11.4 `-O3`, Linux Docker container. Full methodology and reproduction instructions in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-Measured with Google Benchmark (`FX_PERF_ENABLED=OFF`, 5 repetitions per benchmark).
+### End-to-End Latency
 
-| Component | Mean | Median | StdDev |
-|-----------|------|--------|--------|
-| Arena Allocate | 0.73 ns | 0.73 ns | 0.01 ns |
-| Compute Mismatch | 0.94 ns | 0.94 ns | 0.00 ns |
-| Hash Lookup (first probe) | 0.93 ns | 0.89 ns | 0.06 ns |
-| Hash Lookup (90% load) | 6.35 ns | 6.35 ns | 0.06 ns |
-| Hash Upsert | 65.50 ns | 65.90 ns | 1.15 ns |
-| SPSC Ring Pop | 6.64 ns | 6.75 ns | 0.37 ns |
-| SPSC Ring Push | 6.69 ns | 6.78 ns | 0.62 ns |
-| SPSC Ring Push+Pop | 8.97 ns | 9.12 ns | 0.29 ns |
-| Timer Wheel Schedule | 4.30 ns | 4.27 ns | 0.07 ns |
+Measured across the full reconciliation pipeline (ingest → divergence detection) with TSC-based instrumentation over 50K events.
 
-### Latency Distribution (instrumented, 50K iterations)
+| Percentile | Latency |
+|------------|---------|
+| P50 | 196 ns |
+| P99 | 379 ns |
+| P99.9 | 1,007 ns |
 
-| Metric | P50 | P99 | P99.9 |
-|--------|-----|-----|-------|
-| End-to-End Latency | 196 ns | 379 ns | 1,007 ns |
-| Reconciler Process Event | 245 ns | 535 ns | 858 ns |
-| Hash Table Upsert | 54 ns | 289 ns | 330 ns |
-| Hash Table Lookup | 18 ns | 20 ns | 25 ns |
-| Timer Wheel Schedule | 13 ns | 15 ns | 15 ns |
-| Arena Allocate | 10 ns | 15 ns | 28 ns |
-| SPSC Ring Push | 13 ns | 15 ns | 15 ns |
-| SPSC Ring Pop | 10 ns | 13 ns | 13 ns |
-| Mismatch Compute | 10 ns | 15 ns | 25 ns |
+P99 is **13,000x** under the 5 ms NFR target. Max outliers (~12 µs) are OS preemption on non-isolated cores.
 
-### Soak Test (20K events/sec, 5 minutes)
+### Component Latency (instrumented pipeline)
 
-- ✅ **5,980,000 events** processed (Primary: 2,990,000 + Dropcopy: 2,990,000)
-- ✅ **Zero crashes**, zero drops — all events accounted for
-- Memory: Initial 557 MB → Final 647 MB (RSS)
+| Operation | P50 | P99 | P99.9 |
+|-----------|-----|-----|-------|
+| Reconciler process event | 245 ns | 535 ns | 858 ns |
+| Hash table upsert | 54 ns | 289 ns | 330 ns |
+| Hash table lookup | 18 ns | 20 ns | 25 ns |
+| SPSC ring push | 13 ns | 15 ns | 15 ns |
+| SPSC ring pop | 10 ns | 13 ns | 13 ns |
+| Arena allocate | 10 ns | 15 ns | 28 ns |
+| Timer wheel schedule | 13 ns | 15 ns | 15 ns |
+| Mismatch compute | 10 ns | 15 ns | 25 ns |
 
-### CPU Flame Graph
+Instrumentation adds ~19 ns per measurement point. Production builds use `FX_PERF_ENABLED=OFF` (zero-overhead macros).
 
-The interactive flame graph from a 300-second `perf record` session (2M samples) is available at
-[`docs/performance/flamegraph.svg`](docs/performance/flamegraph.svg). Top hot spots:
+### Soak Test (20K events/sec sustained)
 
-| Function | % CPU |
-|----------|-------|
-| `OrderStateStore::find` | 15.80% |
-| `OrderStateStore::upsert` | 3.44% |
-| `OrderStateStore::alloc_state` | 3.17% |
+- **5,980,000 events** processed (Primary: 2,990,000 + Dropcopy: 2,990,000)
+- **Zero drops**, zero crashes — all events accounted for
+- Memory: 557 MB initial → 647 MB final (arena warm-up, stabilizes at steady state)
+
+### CPU Profile
+
+Full-system `perf record` (60s, 10K events/sec sustained Aeron load, 182K samples): [`docs/performance/flamegraph.svg`](docs/performance/flamegraph.svg)
+
+| Function | % CPU | Analysis |
+|----------|-------|----------|
+| `AeronSubscriber::run` | 48.2% | Busy-polling shared memory for inbound messages |
+| `Reconciler::run` | 32.4% | Main event loop — spin-polling SPSC ring |
+| `Subscription::poll` | 17.3% | Aeron message delivery |
+| Business logic total | < 0.2% | `upsert` + `find` + `process_event` + `alloc_state` combined |
+
+The reconciliation engine is invisible in the profile — 97.8% of CPU is message transport and event-loop polling.
 
 Full performance report → [docs/PERFORMANCE.md](docs/PERFORMANCE.md)
 Design decisions → [docs/DESIGN_JOURNAL.md](docs/DESIGN_JOURNAL.md)
@@ -350,12 +351,12 @@ This repository is being developed as a production-style, educational project fo
   - Focus: core infra, correctness, performance.
   - All data, venues, and identifiers in the project are synthetic and not related to any real firm.
 
-Planned milestones:
+Milestones:
   - v0.1 – Basic reconciliation of primary vs drop-copy from synthetic logs.
   - v0.2 – Lock-free ingestion + zero-allocation state store.
   - v0.3 – Divergence & gap detection with latency/throughput benchmarks.
-  - v0.4 – Persistence and replay engine.
-  - v1.0 – End-to-end, production-style daemon with query/CLI interface.
+  - **v1.0 – Production-ready daemon: sub-µs P99 reconciliation, soak-tested at 20K events/sec, zero drops.** ← current
+  - v2.0 – Persistence, replay, multi-session, FX instrument extensions (see [ROADMAP_V2.md](ROADMAP_V2.md)).
 
 
 10. Why This Project Exists

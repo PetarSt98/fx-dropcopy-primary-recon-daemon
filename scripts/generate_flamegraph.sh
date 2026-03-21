@@ -383,16 +383,33 @@ generate_reports() {
     log "Generating flame graph SVG..."
     local fg_title
     if [[ "${BENCH_MODE}" == true ]]; then
-        fg_title="FX Reconciler BENCHMARK Profile (${DURATION_SECS}s, pure business logic)"
+        fg_title="FX Reconciler CPU Profile (${DURATION_SECS}s, business logic only)"
     else
         fg_title="FX Reconciler CPU Profile (${DURATION_SECS}s @ ${ORDERS_PER_SEC} events/sec)"
     fi
-    ${SUDO} "${PERF_CMD}" script -i "${REPO_ROOT}/perf.data" \
-        | "${FLAMEGRAPH_DIR}/stackcollapse-perf.pl" \
-        | "${FLAMEGRAPH_DIR}/flamegraph.pl" \
-            --title "${fg_title}" \
-            --subtitle "$(date '+%Y-%m-%d %H:%M:%S')" \
-        > "${OUTPUT_DIR}/flamegraph.svg" 2>/dev/null || true
+
+    if [[ "${BENCH_MODE}" == true ]]; then
+        # In benchmark mode, filter out Google Benchmark harness frames so the
+        # flame graph shows only business-logic hot spots.  Removed frames:
+        #   BM_*                  - benchmark wrapper functions
+        #   benchmark::*          - Google Benchmark internals
+        #   __udivti3             - GCC 128-bit division used by benchmark timing
+        #   __vdso_clock_gettime  - vDSO clock reads from benchmark timing
+        ${SUDO} "${PERF_CMD}" script -i "${REPO_ROOT}/perf.data" \
+            | "${FLAMEGRAPH_DIR}/stackcollapse-perf.pl" \
+            | grep -v -E ';(BM_|benchmark::|__udivti3|__vdso_clock_gettime)' \
+            | "${FLAMEGRAPH_DIR}/flamegraph.pl" \
+                --title "${fg_title}" \
+                --subtitle "$(date '+%Y-%m-%d %H:%M:%S') — benchmark harness frames filtered" \
+            > "${OUTPUT_DIR}/flamegraph.svg" 2>/dev/null || true
+    else
+        ${SUDO} "${PERF_CMD}" script -i "${REPO_ROOT}/perf.data" \
+            | "${FLAMEGRAPH_DIR}/stackcollapse-perf.pl" \
+            | "${FLAMEGRAPH_DIR}/flamegraph.pl" \
+                --title "${fg_title}" \
+                --subtitle "$(date '+%Y-%m-%d %H:%M:%S')" \
+            > "${OUTPUT_DIR}/flamegraph.svg" 2>/dev/null || true
+    fi
 
     set -o pipefail
 

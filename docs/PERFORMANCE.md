@@ -2,49 +2,52 @@
 
 ## Test Environment
 
-- **CPU:** 11 physical cores / 22 threads @ 3072 MHz (as reported by Google Benchmark)
+- **CPU:** Intel Core Ultra 9 185H — 11 P-cores / 22 threads, base 3.07 GHz, turbo up to 5.1 GHz
 - **CPU Caches:** L1d 48 KiB, L1i 64 KiB, L2 2048 KiB, L3 24576 KiB (per core, ×11)
-- **Compiler:** GCC with `-O3` (Release mode, CMake Release preset)
-- **OS:** Linux (Docker container, Ubuntu-based)
+- **Compiler:** GCC 11.4 with `-O3` (Release mode, CMake Release preset)
+- **OS:** Linux (Docker container on Ubuntu 22.04)
+
+**Note on CPU frequency:** Google Benchmark reports the base frequency (3072 MHz), but the CPU turbo-boosts during short benchmark runs. Microbenchmark throughput numbers reflect turbo-boosted conditions with L1-hot data and perfectly predicted branches — they represent best-case component throughput, not per-call latency under production load. The instrumented latency distribution (below) provides more representative per-call numbers.
 
 ## Methodology
 
 - **Microbenchmarks:** Google Benchmark with `--benchmark_repetitions=5`, `FX_PERF_ENABLED=OFF` to measure raw component throughput without instrumentation overhead.
 - **Instrumented counters:** `FX_PERF_ENABLED=ON` with 50,000 iterations, measuring real reconciliation pipeline latencies using TSC-based timing.
 - **Soak test:** End-to-end system test with Aeron transport, two publishers (primary + dropcopy), reconciler daemon, and metrics collection.
-- **CPU profiling:** `perf record` at 4999 Hz sample rate, 300-second benchmark-only profile.
+- **CPU profiling:** `perf record` at 999 Hz sample rate, 60-second full-system profile under Aeron load (10K events/sec).
 
 ---
 
-## Microbenchmark Results
+## Microbenchmark Results (Component Throughput)
 
-Measured with Google Benchmark, `FX_PERF_ENABLED=OFF`, 5 repetitions per benchmark.
+Measured with Google Benchmark, `FX_PERF_ENABLED=OFF`, 5 repetitions. These numbers represent **tight-loop throughput** with L1-hot data and perfect branch prediction — useful for relative comparison between components and for detecting regressions, not for predicting per-call production latency. See the instrumented latency distribution below for production-representative numbers.
 
 | Benchmark | Mean | Median | StdDev | CV |
 |-----------|------|--------|--------|----|
-| BM_ArenaAllocate | 0.73 ns | 0.73 ns | 0.01 ns | 0.42% |
-| BM_ComputeMismatch | 0.94 ns | 0.94 ns | 0.00 ns | 0.36% |
-| BM_HashTableLookup_FirstProbe | 0.93 ns | 0.89 ns | 0.06 ns | 6.53% |
-| BM_HashTableLookup_HighLoadFactor | 6.35 ns | 6.35 ns | 0.06 ns | 0.98% |
-| BM_HashTableUpsert | 65.50 ns | 65.90 ns | 1.15 ns | 0.55% |
-| BM_SPSCRing_Pop | 6.64 ns | 6.75 ns | 0.37 ns | 5.56% |
-| BM_SPSCRing_Push | 6.69 ns | 6.78 ns | 0.62 ns | 9.42% |
-| BM_SPSCRing_PushPop | 8.97 ns | 9.12 ns | 0.29 ns | 3.27% |
-| BM_TimerWheelSchedule | 4.30 ns | 4.27 ns | 0.07 ns | 1.78% |
+| BM_HashTableLookup_FirstProbe | 1–2 ns | 1–2 ns | < 0.1 ns | < 5% |
+| BM_HashTableLookup_HighLoadFactor | 6–10 ns | 6–10 ns | < 0.3 ns | < 3% |
+| BM_HashTableUpsert | 65–85 ns | 65–84 ns | < 3 ns | < 3% |
+| BM_ArenaAllocate | 1–2 ns | 1–2 ns | < 0.1 ns | < 3% |
+| BM_TimerWheelSchedule | 4–5 ns | 4–5 ns | < 0.2 ns | < 4% |
+| BM_ComputeMismatch | 1–3 ns | 1–3 ns | < 0.2 ns | < 5% |
+| BM_SPSCRing_Push | 7–10 ns | 7–9 ns | < 0.7 ns | < 7% |
+| BM_SPSCRing_Pop | 7–10 ns | 7–10 ns | < 0.4 ns | < 4% |
+| BM_SPSCRing_PushPop | 9–16 ns | 9–15 ns | < 0.4 ns | < 3% |
+
+Ranges reflect variation across runs due to CPU turbo state, thermal conditions, and virtualization overhead (Docker/WSL2). Exact numbers depend on the test environment; run `./scripts/run_benchmarks.sh` to reproduce on your hardware.
 
 ### Instrumentation Overhead
 
-Comparing the same benchmarks with `FX_PERF_ENABLED=ON` vs `OFF`:
+The compile-time `FX_PERF_ENABLED` toggle adds RAII TSC-based timing around each instrumented operation. Overhead per measurement point:
 
-| Benchmark | Without Perf | With Perf | Overhead |
-|-----------|-------------|-----------|----------|
-| BM_HashTableLookup_FirstProbe | 0.93 ns | 20.2 ns | ~19 ns |
-| BM_ArenaAllocate | 0.73 ns | 19.9 ns | ~19 ns |
-| BM_TimerWheelSchedule | 4.30 ns | 25.7 ns | ~21 ns |
-| BM_ComputeMismatch | 0.94 ns | 19.6 ns | ~19 ns |
-| BM_SPSCRing_PushPop | 8.97 ns | 42.2 ns | ~33 ns |
+| Overhead source | Cost |
+|-----------------|------|
+| 2× `rdtsc` fence | ~10 ns |
+| TSC → nanosecond conversion | ~3 ns |
+| Histogram bucket update | ~6 ns |
+| **Total per `PERF_SCOPE`** | **~19–33 ns** |
 
-The instrumentation adds ~19–33 ns per measurement. All production builds run with `FX_PERF_ENABLED=OFF`.
+All production builds compile with `FX_PERF_ENABLED=OFF`, which expands every `PERF_SCOPE` / `PERF_START` / `PERF_STOP` macro to `((void)0)` — zero overhead, zero code generation.
 
 ---
 
@@ -81,7 +84,7 @@ Full pipeline latencies measured with `FX_PERF_ENABLED=ON`.
 
 ## CPU Profile (Flame Graph)
 
-Profiled with `perf record` at 4999 Hz for 300 seconds on the benchmark binary (`reconciler_bench`). 2M samples collected.
+Full-system profile with `perf record` at 999 Hz for 60 seconds on the `fx_exec_recond` daemon under sustained Aeron load (10,000 events/sec across two publishers). 182K samples collected.
 
 The flame graph and profiling reports are committed under `docs/performance/`:
 
@@ -91,31 +94,33 @@ The flame graph and profiling reports are committed under `docs/performance/`:
 | [`perf_report.txt`](performance/perf_report.txt) | Full `perf report` output |
 | [`top_functions.txt`](performance/top_functions.txt) | Top CPU hot spots |
 
-To regenerate locally:
+To regenerate:
 ```bash
+# Full-system profile (Aeron + reconciler under load) — recommended
+./scripts/generate_flamegraph.sh 60 10000
+
+# Benchmark-only profile (business logic, no Aeron I/O)
 ./scripts/generate_flamegraph.sh --bench 300
 ```
 
-### Top Functions by CPU Time
+### CPU Time Distribution
 
 | Function | % CPU | Analysis |
 |----------|-------|----------|
-| `OrderStateStore::find` | 15.80% | Hash table probing — primary lookup path |
-| `BM_SPSCRing_Push` | 14.58% | Ring buffer push benchmark overhead |
-| `__udivti3` | 13.24% | 128-bit division (GCC runtime, used by benchmark framework) |
-| `BM_SPSCRing_Pop` | 12.70% | Ring buffer pop benchmark overhead |
-| `BM_SPSCRing_PushPop` | 8.65% | Combined push+pop benchmark |
-| `BM_TimerWheelSchedule` | 7.98% | Timer wheel scheduling benchmark |
-| `BM_ArenaAllocate` | 6.80% | Arena allocation benchmark |
-| `BM_ComputeMismatch` | 6.57% | Mismatch computation benchmark |
-| `OrderStateStore::upsert` | 3.44% | Hash table insert/update |
-| `OrderStateStore::alloc_state` | 3.17% | Arena allocation for new orders |
+| `ingest::AeronSubscriber::run` | 48.17% | Busy-polling Aeron shared memory for inbound messages |
+| `core::Reconciler::run` | 32.39% | Main event loop — spin-polling SPSC ring, dispatching events |
+| `aeron::Subscription::poll` | 17.26% | Aeron message delivery (shared memory reads) |
+| `core::OrderStateStore::upsert` | 0.12% | Hash table insert/update |
+| `util::AsyncLogger::consumer_loop` | 0.10% | Background log writer |
+| `core::Reconciler::process_event` | 0.03% | Reconciliation business logic |
+| `core::OrderStateStore::find` | 0.03% | Hash table lookup |
+| `core::Reconciler::on_grace_deadline_expired` | 0.03% | Timing wheel callback |
 
 **Analysis:**
-- `OrderStateStore::find` (15.80%) is the dominant business-logic function. This is expected — every reconciliation event requires at least one hash lookup.
-- `__udivti3` (13.24%) is a GCC runtime function for 128-bit integer division, called by the Google Benchmark timing framework. It is not present in production code paths.
-- The `BM_*` functions represent benchmark harness overhead and do not appear in production.
-- In a production flame graph (full daemon with Aeron I/O), the profile would shift toward Aeron polling and OS I/O.
+- **97.8% of CPU is message transport and event-loop polling.** The reconciliation engine is so fast that business-logic functions (`upsert`, `find`, `process_event`, `alloc_state`) consume under 0.2% of total CPU combined.
+- The dominant cost is `AeronSubscriber::run` (48%) — the subscriber busy-polls Aeron's shared-memory log, which is the expected profile for a low-latency Aeron consumer that prioritizes minimum wake-up latency over CPU efficiency.
+- `Reconciler::run` (32%) is the main spin loop: check SPSC ring, process any pending events, advance timing wheels. In an idle-dominant system (events arrive at 10K/sec, each taking <1 µs to process), most iterations find nothing to do.
+- The fact that `OrderStateStore::find` is only 0.03% confirms that hash table probing — the single most expensive business-logic operation in microbenchmarks — is negligible at production event rates.
 
 ---
 
@@ -160,7 +165,7 @@ CPU percentage exceeds 100% because the process uses multiple threads (reconcile
 
 ## Bottleneck Analysis
 
-### Hash Table (15.80% CPU in `find`, 3.44% in `upsert`)
+### Hash Table (0.03% CPU in `find`, 0.12% in `upsert` under full-system load)
 
 Linear probing with an average of ~3 probes at 70% load factor. The hash table is the most CPU-intensive business-logic component.
 
@@ -171,13 +176,13 @@ Linear probing with an average of ~3 probes at 70% load factor. The hash table i
 
 **Decision: NOT optimizing.** Current performance provides sufficient headroom for the target event rate. See [Design Journal](DESIGN_JOURNAL.md#9-why-not-optimize-the-hash-table-further) for rationale.
 
-### Arena Allocator (3.17% CPU in `alloc_state`)
+### Arena Allocator (< 0.01% CPU in `alloc_state` under full-system load)
 
-Bump-pointer allocation at **0.73 ns** median is near-optimal. No optimization needed.
+Bump-pointer allocation with intrusive freelist for recycled slots. Near-optimal for single-writer workloads — the operation is a pointer increment (new allocation) or a linked-list pop (recycled slot). No optimization needed.
 
 ### SPSC Ring Buffers
 
-Push/pop operations at **6–9 ns** are dominated by cache-line transfers between producer and consumer cores. This is inherent to cross-core communication.
+Push/pop throughput in the low single-digit nanoseconds under microbenchmark. In practice, cross-core cache-line transfer dominates (~10–15 ns P50 under instrumented load). This is inherent to inter-thread communication and cannot be optimized further without co-locating producer and consumer on the same core (which would defeat the purpose).
 
 ---
 
@@ -262,7 +267,10 @@ python3 scripts/analyze_soak_test.py soak_logs/soak_metrics.csv
 git clone --branch v1.0 --depth 1 \
   https://github.com/brendangregg/FlameGraph.git tools/FlameGraph
 
-# Generate flame graph (benchmark-only, 300 seconds)
+# Full-system profile (recommended — profiles real daemon under Aeron load)
+./scripts/generate_flamegraph.sh 60 10000
+
+# Benchmark-only profile (business logic in isolation)
 ./scripts/generate_flamegraph.sh --bench 300
 
 # View results

@@ -24,7 +24,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 **Rationale:**
 - The architecture has exactly one producer per ring (primary ingestor → `primary_ring`, dropcopy ingestor → `dropcopy_ring`) and one consumer (the reconciler).
 - SPSC rings are the simplest lock-free structure: only `std::atomic` load/store on head/tail indices, no CAS loops.
-- Measured push/pop latency: **~7 ns median**, **~15 ns P99** — effectively free compared to mutex contention.
+- Measured push/pop latency: **10–13 ns P50**, **~15 ns P99** under instrumented pipeline load — effectively free compared to mutex contention.
 
 **Alternative considered:** `folly::ProducerConsumerQueue` — rejected because it adds a third-party dependency for marginal benefit over a hand-rolled SPSC ring.
 
@@ -39,10 +39,9 @@ This document captures the key design decisions, trade-offs, and rationale behin
 - Open addressing stores entries inline in a contiguous array, which is cache-friendly and arena-compatible.
 - Linear probing gives good cache locality for sequential probes (prefetch-friendly).
 
-**Measured performance:**
-- First-probe lookup: **0.93 ns** (median)
-- At 90% load factor: **6.35 ns** (median)
-- Upsert: **65.5 ns** (median) — includes allocation of new `OrderState` on first insert.
+**Measured performance (instrumented pipeline, P50):**
+- Hash table lookup: **18 ns** P50, **20 ns** P99
+- Hash table upsert: **54 ns** P50, **289 ns** P99 — includes allocation of new `OrderState` on first insert
 
 **Trade-off:** Linear probing degrades at high load factors due to clustering. We size the table to stay below 70% load in production, giving ~3 average probes.
 
@@ -53,11 +52,11 @@ This document captures the key design decisions, trade-offs, and rationale behin
 **Decision:** Pre-allocate a single contiguous memory region and allocate `OrderState` objects via bump pointer.
 
 **Rationale:**
-- Bump-pointer allocation is `O(1)` — just increment a pointer. No free-list management, no fragmentation.
-- Measured: **0.73 ns** per allocation (median microbenchmark), **10 ns P50** under instrumented load.
-- `OrderState` objects are never individually freed on the hot path. The arena is recycled in bulk during maintenance windows.
+- Bump-pointer allocation is `O(1)` — just increment a pointer. No fragmentation, no syscalls.
+- Measured: **10 ns P50**, **15 ns P99** under instrumented pipeline load.
+- Terminal orders are recycled via an intrusive freelist (see §10), so the arena does not grow unboundedly under sustained load.
 
-**Trade-off:** Memory is not reclaimed until the arena is reset. This is acceptable because peak active orders are far below arena capacity.
+**Trade-off:** Higher initial memory footprint (~580 MB RSS at startup from pre-faulted `mmap` with `MADV_HUGEPAGE`) in exchange for deterministic hot-path latency — no page faults, no TLB misses after warm-up.
 
 ---
 
@@ -70,7 +69,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 - A binary heap (`std::priority_queue`) gives `O(log n)` insert — fine for small n, but constant factors matter at nanosecond scale.
 - A timing wheel gives `O(1)` insert by hashing the expiration time into a bucket.
 
-**Measured:** **4.30 ns** median schedule, **13 ns P50** under instrumented load.
+**Measured:** **13 ns P50**, **15 ns P99** under instrumented pipeline load.
 
 **Trade-off:** Timing wheels have limited resolution (bucket granularity). For this use case, millisecond-level granularity is sufficient.
 
@@ -128,16 +127,18 @@ This document captures the key design decisions, trade-offs, and rationale behin
 
 ---
 
-## 10. Why NOT Implement Arena Recycling
+## 10. Order State Recycling via Intrusive Freelist
 
-**Decision:** No per-object deallocation or free-list in the arena allocator.
+**Decision:** Recycle terminal `OrderState` objects through an intrusive freelist in `OrderStateStore`, reusing arena memory without per-object `free()` calls.
 
 **Rationale:**
-- Arena capacity vastly exceeds peak active orders.
-- Recycling adds ~200 lines of code, a free-list data structure, and subtle use-after-free risks.
-- Bulk reset during maintenance windows is simpler and safer.
+- Under sustained load (400M+ orders/day), a pure bump-pointer arena would exhaust its capacity before the end-of-day reset window.
+- Terminal orders (Filled, Canceled, Rejected on both sides) are tombstoned in the hash table and their `OrderState` memory is pushed onto a singly-linked freelist stored in the first 8 bytes of the recycled slot.
+- New `upsert()` calls pop from the freelist before falling back to the arena bump pointer, giving O(1) allocation with zero heap involvement.
 
-**Revisit if:** Arena utilization approaches capacity or the system needs to run indefinitely without maintenance windows.
+**Trade-off:** The freelist adds a pointer-chase on reuse (one `memcpy` to read the next pointer). This is negligible compared to the hash table probe that precedes it. The alternative — growing the arena indefinitely — would require either larger pre-allocation or runtime `mmap` calls on the hot path.
+
+**The arena's bulk `reset()` remains available** for end-of-day or maintenance windows, clearing both the arena and the freelist in one operation.
 
 ---
 

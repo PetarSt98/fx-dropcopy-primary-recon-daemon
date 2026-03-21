@@ -3,75 +3,78 @@
 #
 # Total Lost Samples: 0
 #
-# Samples: 2M of event 'cpu-clock:pppH'
-# Event count (approx.): 475978776720
+# Samples: 182K of event 'cpu-clock:pppH'
+# Event count (approx.): 182950950768
 #
-# Overhead  Command          Shared Object         Symbol                                                                                          
-# ........  ...............  ....................  ................................................................................................
+# Overhead  Command         Shared Object        Symbol                                                                                                                                                                                                                              
+# ........  ..............  ...................  ....................................................................................................................................................................................................................................
 #
-    15.80%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::find
+    48.17%  fx_exec_recond  fx_exec_recond       [.] ingest::AeronSubscriber::run
             |
-            ---core::OrderStateStore::find
+            ---ingest::AeronSubscriber::run
+               0x100000001
+               std::_Sp_counted_ptr_inplace<ingest::RealSubscriptionView, std::allocator<ingest::RealSubscriptionView>, (__gnu_cxx::_Lock_policy)2>::~_Sp_counted_ptr_inplace
+               0x900000000000841f
+
+    32.39%  fx_exec_recond  fx_exec_recond       [.] core::Reconciler::run
+            |
+            ---core::Reconciler::run
+
+    17.26%  fx_exec_recond  fx_exec_recond       [.] aeron::Subscription::poll<ingest::FragmentHandler const&>
+            |
+            ---aeron::Subscription::poll<ingest::FragmentHandler const&>
                |          
-                --2.12%--0x55a347c29060
-                          0x55a347b29050
-
-    14.58%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Push
-            |
-            ---BM_SPSCRing_Push
-               benchmark::internal::BenchmarkInstance::Run
-               benchmark::internal::(anonymous namespace)::RunInThread
-
-    13.24%  reconciler_benc  libgcc_s.so.1         [.] __udivti3
-            |
-            ---__udivti3
+               |--10.62%--0x100000001
+               |          std::_Sp_counted_ptr_inplace<ingest::RealSubscriptionView, std::allocator<ingest::RealSubscriptionView>, (__gnu_cxx::_Lock_policy)2>::~_Sp_counted_ptr_inplace
+               |          0x900000000000841f
                |          
-               |--6.54%--benchmark::internal::BenchmarkInstance::Run
-               |          benchmark::internal::(anonymous namespace)::RunInThread
+               |--1.19%--0xf
+               |          |          
+               |          |--0.62%--0x36303236343a31
+               |          |          
+               |           --0.57%--0x38393839343a31
                |          
-                --2.39%--0
+               |--0.86%--0x36303236343a31
+               |          
+               |--0.82%--0x38393839343a31
+               |          
+               |--0.71%--0x7fac70000ef0
+               |          0x7fac70000fa0
+               |          0x3001000
+               |          0
+               |          
+                --0.68%--0x7fac70001170
+                          0x7fac70001220
+                          0x3001000
+                          0
 
-    12.70%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_Pop
+     0.55%  fx_exec_recond  [kernel.kallsyms]    [k] finish_task_switch.isra.0
             |
-            ---BM_SPSCRing_Pop
-               benchmark::internal::BenchmarkInstance::Run
-               benchmark::internal::(anonymous namespace)::RunInThread
+            ---finish_task_switch.isra.0
+               __schedule
+               schedule
+               do_nanosleep
+               hrtimer_nanosleep
+               common_nsleep
+               __x64_sys_clock_nanosleep
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               clock_nanosleep
+               |          
+                --0.53%--0x7fac9a99c640
 
-     8.65%  reconciler_benc  reconciler_bench      [.] BM_SPSCRing_PushPop
+     0.13%  fx_exec_recond  libc.so.6            [.] clock_nanosleep
             |
-            ---BM_SPSCRing_PushPop
-               benchmark::internal::BenchmarkInstance::Run
-               benchmark::internal::(anonymous namespace)::RunInThread
+            ---clock_nanosleep
+               |          
+                --0.12%--0x7fac9a99c640
 
-     7.98%  reconciler_benc  reconciler_bench      [.] BM_TimerWheelSchedule
-            |
-            ---BM_TimerWheelSchedule
-
-     6.80%  reconciler_benc  reconciler_bench      [.] BM_ArenaAllocate
-            |
-            ---BM_ArenaAllocate
-               0
-
-     6.57%  reconciler_benc  reconciler_bench      [.] BM_ComputeMismatch
-            |
-            ---BM_ComputeMismatch
-               0
-
-     3.44%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::upsert
+     0.12%  fx_exec_recond  fx_exec_recond       [.] core::OrderStateStore::upsert
             |
             ---core::OrderStateStore::upsert
-               |          
-                --0.58%--0x55a347d29470
-                          0x55a347b29460
 
-     3.17%  reconciler_benc  reconciler_bench      [.] core::OrderStateStore::alloc_state
+     0.10%  fx_exec_recond  fx_exec_recond       [.] util::AsyncLogger::consumer_loop
             |
-            ---core::OrderStateStore::alloc_state
+            ---util::AsyncLogger::consumer_loop
+               0x7fac9a99c640
 
-     0.98%  reconciler_benc  libc.so.6             [.] _IO_default_xsputn
-            |
-            ---_IO_default_xsputn
-
-     0.94%  reconciler_benc  reconciler_bench      [.] 0x0000000000006a10
-            |
-            ---0x55a344541a10
