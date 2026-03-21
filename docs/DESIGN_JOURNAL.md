@@ -13,7 +13,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 - Heap allocations invoke `malloc`, which can trigger `mmap`/`brk` syscalls and introduce unpredictable latency spikes.
 - By pre-allocating all memory (arena + hash table + ring buffers) during startup, the hot path avoids syscall jitter entirely.
 
-**Trade-off:** Higher initial memory footprint (~580 MB RSS at startup) in exchange for deterministic latency.
+**Trade-off:** Higher initial memory footprint (~557 MB RSS at startup) in exchange for deterministic latency.
 
 ---
 
@@ -56,7 +56,7 @@ This document captures the key design decisions, trade-offs, and rationale behin
 - Measured: **10 ns P50**, **15 ns P99** under instrumented pipeline load.
 - Terminal orders are recycled via an intrusive freelist (see §10), so the arena does not grow unboundedly under sustained load.
 
-**Trade-off:** Higher initial memory footprint (~580 MB RSS at startup from pre-faulted `mmap` with `MADV_HUGEPAGE`) in exchange for deterministic hot-path latency — no page faults, no TLB misses after warm-up.
+**Trade-off:** Higher initial memory footprint (~557 MB RSS at startup from pre-faulted `mmap` with `MADV_HUGEPAGE`) in exchange for deterministic hot-path latency — no page faults, no TLB misses after warm-up.
 
 ---
 
@@ -115,15 +115,15 @@ This document captures the key design decisions, trade-offs, and rationale behin
 
 ## 9. Why NOT Optimize the Hash Table Further
 
-**Decision:** Keep linear probing despite profiling showing `OrderStateStore::find` at 15.80% CPU.
+**Decision:** Keep linear probing. Under full-system load (10K events/sec sustained), `OrderStateStore::find` is 0.03% of CPU and `upsert` is 0.12% — the hash table is not a bottleneck.
 
 **Rationale:**
-- Current throughput headroom is sufficient for target load.
-- Robin-hood hashing or SIMD bucket scanning would reduce probe count but add implementation complexity.
-- The hash table is not the bottleneck — the system sustains the target event rate with CPU headroom to spare.
+- In microbenchmarks (tight-loop, L1-hot data), hash table operations dominate because they are the only work being done. Under production load with Aeron transport, business logic is < 0.2% of total CPU.
+- Robin-hood hashing or SIMD bucket scanning would reduce probe count but add implementation complexity for negligible real-world gain.
+- The system sustains the target event rate with CPU headroom to spare.
 - Premature optimization adds debugging complexity without business value.
 
-**Revisit if:** Probe count monitoring shows degradation at higher load factors or throughput targets increase.
+**Revisit if:** Probe count monitoring shows degradation at higher load factors or throughput targets increase significantly beyond current levels.
 
 ---
 
